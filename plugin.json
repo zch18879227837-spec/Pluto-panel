@@ -1,0 +1,46 @@
+{
+  "id": "astrbot_plugin_token_panel",
+  "name": "astrbot_plugin_token_panel",
+  "display_name": "PLUTO panel（普鲁托面板）",
+  "version": "1.3.1",
+  "author": "Charon",
+  "license": "MIT",
+  "description": "PLUTO panel（普鲁托面板）把每个会话的上下文用量变成看得见、管得住的东西：后台扩展功能内置面板，实时展示模型窗口上限、已用 / 剩余 Token 与占用百分比，支持预警阈值、自动播报、一键清空；并内置上下文统计（/ctx）、上下文压缩（/ctx_compress）与承接（/ctx_continue）的全套指令。",
+  "short_description": "PLUTO panel：Token 用量面板 + 上下文统计 / 压缩 / 承接",
+  "repo": "https://github.com/Charon/astrbot_plugin_token_panel",
+  "homepage": "",
+  "keywords": [
+    "astrbot",
+    "astrbot-plugin",
+    "token",
+    "context",
+    "llm",
+    "dashboard",
+    "onebot"
+  ],
+  "categories": [
+    "工具",
+    "管理"
+  ],
+  "astrbot_version": ">=4.11.4",
+  "entry": "main.py",
+  "views": [
+    "views/dashboard/index.html"
+  ],
+  "requires": [],
+  "commands": [
+    "/token_ctx",
+    "/token_ctxon",
+    "/token_ctxoff",
+    "/token_ctxset",
+    "/token_clearctx",
+    "/ctx",
+    "/ctx_compress",
+    "/ctx_continue",
+    "/ctx_sessions",
+    "/ctx_switch",
+    "/ctx_auto"
+  ],
+  "icon": "assets/icon.png",
+  "banner": "assets/banner.png"
+}
