@@ -119,21 +119,84 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* ---------------- 外壳：左侧导航 + 右侧主区 ---------------- */
   #app {
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 34px 34px 72px;
+    display: grid;
+    grid-template-columns: 226px minmax(0, 1fr);
+    align-items: start;
+    min-height: 100vh;
+    max-width: none;
+    margin: 0;
+    padding: 0;
     transform-origin: top left;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 20px 12px 14px;
+    background: var(--panel-2);
+    border-right: 1px solid var(--line);
+  }
+
+  .brand { padding: 0 8px 20px; }
+  .brand .bm {
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .brand .bm em {
+    font-style: normal;
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--muted);
+    margin-left: 2px;
+  }
+  .brand .bk {
+    margin-top: 5px;
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .side-foot {
+    margin-top: auto;
+    padding: 12px 8px 2px;
+    border-top: 1px solid var(--line);
+    font-size: 10.5px;
+    line-height: 1.6;
+    color: var(--faint);
+  }
+  .side-foot .ver { color: var(--muted); }
+
+  .main {
+    min-width: 0;
+    padding: 26px 30px 72px;
+  }
+
+  /* 主区内容不再无限拉宽，保持原来的阅读密度 */
+  .main > *:not(.modal-mask):not(.toast) {
+    max-width: 1080px;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   /* ---------------- 头部 ---------------- */
   header.top {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 20px;
-    padding-bottom: 22px;
+    padding-bottom: 16px;
     border-bottom: 1px solid var(--line);
+    margin-bottom: 20px;
   }
 
   .kicker {
@@ -197,37 +260,47 @@
   button.danger { border-color: transparent; color: var(--muted); padding: 5px 9px; font-size: 12px; }
   button.danger:hover { color: var(--high); background: rgba(178, 58, 46, 0.08); }
 
-  /* ---------------- 选项卡 ---------------- */
+  /* ---------------- 侧边导航（沿用 .tabs/.tab 结构，竖排） ---------------- */
   .tabs {
     display: flex;
-    gap: 30px;
-    border-bottom: 1px solid var(--line);
-    margin: 0 0 26px;
+    flex-direction: column;
+    gap: 2px;
+    border-bottom: 0;
+    margin: 0;
   }
 
   .tab {
     position: relative;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
     border: 0;
-    border-radius: 0;
+    border-radius: 9px;
     background: transparent;
-    padding: 15px 1px 13px;
+    padding: 9px 10px;
     font-size: 13px;
     color: var(--muted);
     letter-spacing: 0.01em;
+    text-align: left;
+    transition: background 0.15s ease, color 0.15s ease;
   }
 
-  .tab:hover { color: var(--ink); border-color: transparent; }
-
-  .tab[aria-selected="true"] { color: var(--ink); font-weight: 600; }
-
-  .tab[aria-selected="true"]::after {
-    content: "";
-    position: absolute;
-    left: 0; right: 0; bottom: -1px;
-    height: 2px;
-    background: var(--accent);
-    border-radius: 2px;
+  .tab .ico {
+    flex: none;
+    width: 15px;
+    height: 15px;
+    opacity: 0.72;
+    transition: opacity 0.15s ease, color 0.15s ease;
   }
+
+  .tab:hover { color: var(--ink); background: var(--line-soft); }
+  .tab:hover .ico { opacity: 1; }
+
+  .tab[aria-selected="true"] { color: var(--ink); font-weight: 600; background: var(--accent-soft); }
+  .tab[aria-selected="true"] .ico { opacity: 1; color: var(--accent); }
+
+  .tab[aria-selected="true"]::after { content: none; }
 
   /* ---------------- 卡片 ---------------- */
   .card {
@@ -270,6 +343,13 @@
     min-width: 44px;
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* 滑杆行里的「%」紧贴数字框，不要占满 44px 留出一道空档；
+     整行仍靠右对齐，右边界与下面两行的数值保持一致。 */
+  .row .control > input[type="number"] + .value {
+    min-width: 0;
+    text-align: left;
   }
 
   /* ---------------- 开关 ---------------- */
@@ -555,6 +635,7 @@
   .pill.warn { color: var(--warn); border-color: rgba(200, 148, 47, 0.4); background: rgba(200, 148, 47, 0.08); }
   .pill.high { color: var(--high); border-color: rgba(178, 58, 46, 0.4); background: rgba(178, 58, 46, 0.08); }
   .pill.unknown { color: var(--faint); }
+  .pill.empty { color: var(--faint); border-color: var(--line-soft); background: transparent; }
 
   .session .figures {
     font-size: 12px;
@@ -584,6 +665,13 @@
 
   .bar.warn > i { background: var(--warn); }
   .bar.high > i { background: var(--high); }
+
+  .risk-track { margin-top: 14px; }
+  .risk-track-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: var(--muted); margin-bottom: 7px;
+  }
+  .risk-track .bar { margin-top: 0; }
 
   .session .meta {
     display: flex;
@@ -708,6 +796,16 @@
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; color: var(--ink); word-break: break-all; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .modal .m-body { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.72; white-space: pre-line; }
+  .modal .m-caution {
+    margin: 12px 0 0; padding: 9px 11px; border-radius: 9px;
+    background: rgba(178, 58, 46, 0.06); border: 1px solid rgba(178, 58, 46, 0.22);
+    color: var(--ink); font-size: 12px; line-height: 1.65; white-space: pre-line;
+  }
+  .modal-actions button.strong { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .modal-actions button.strong:hover { filter: brightness(1.07); }
+  .modal-actions button.strong.dangerous { border-color: var(--high); background: transparent; color: var(--high); }
+  .modal-actions button.strong.dangerous:hover { background: var(--high); color: #fff; }
 
   .log-list { margin: 10px 0 0; padding: 0; list-style: none; }
   .log-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
@@ -751,41 +849,287 @@
   .session.flash { box-shadow: 0 0 0 2px var(--accent) inset; }
   .log-empty { padding: 14px 0; color: var(--faint); font-size: 12px; }
 
+  /* ===== v1.4.1：主动消息 ===== */
+  .ps-sub { font-size: 11px; color: var(--faint); margin: 2px 0 8px; }
+  .ps-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line-soft, var(--line)); }
+  .ps-line:last-child { border-bottom: 0; }
+  .ps-line .lab { font-size: 12.5px; }
+  .ps-line .sub { font-size: 11px; color: var(--faint); margin-top: 1px; }
+  .ps-line .ctl { display: flex; align-items: center; gap: 6px; }
+  .ps-log .it { padding: 7px 0; border-bottom: 1px solid var(--line-soft, var(--line)); }
+  .ps-log .it:last-child { border-bottom: 0; }
+  .ps-log .txt { font-size: 12.5px; margin: 2px 0; line-height: 1.5; }
+  .ps-log .meta { color: var(--faint); font-size: 11px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .ps-log .badge { font-size: 10px; padding: 1px 6px; border-radius: 100px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+  .ps-log .badge.skip { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn-ink, var(--warn)); }
+  .ps-sess { padding: 8px 0; border-bottom: 1px solid var(--line-soft, var(--line)); }
+  .ps-sess:last-child { border-bottom: 0; }
+  .ps-sess .head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .ps-sess .name { font-size: 12.5px; }
+  .ps-sess .meta { color: var(--faint); font-size: 11px; margin-top: 3px; }
+  .ps-empty { color: var(--faint); font-size: 12px; padding: 10px 0; }
+
+  /* v1.5.3：导航分组分隔 + 卡片右上角操作 */
+  .nav-sep { height: 1px; margin: 9px 6px; background: var(--line); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .card-head h2 { margin-bottom: 0; }
+
+  /* ================= v1.5.4：图标与轻量动效 =================
+     只加交互层：不新增颜色、不改尺寸与排版，全部用 180ms 过渡。 */
+
+  /* ---- 图标 ---- */
+  .bt-ico {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    opacity: 0.85;
+    transition: opacity 0.18s ease, color 0.18s ease;
+  }
+
+  /* 图标与文字基线对齐，宽度仍随文字自适应 */
+  button.has-ico {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  button.has-ico:hover .bt-ico { opacity: 1; }
+  button.has-ico:disabled .bt-ico { opacity: 0.5; }
+
+  /* ---- 悬浮与按下 ---- */
+  button,
+  .theme-opt {
+    transition:
+      transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1),
+      border-color 0.18s ease,
+      background 0.18s ease,
+      color 0.18s ease;
+  }
+
+  /* 轻微缩放只给按钮和导航，卡片用位移，避免整块内容跟着放大 */
+  button:hover:not(:disabled),
+  .theme-opt:hover:not(:disabled),
+  .tab:hover {
+    transform: translateY(-1px) scale(1.015);
+  }
+
+  button:active:not(:disabled),
+  .theme-opt:active:not(:disabled),
+  .tab:active {
+    transform: translateY(0) scale(0.972);
+    transition-duration: 0.09s;
+  }
+
+  .card,
+  .session,
+  .stat {
+    transition:
+      transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1),
+      border-color 0.18s ease,
+      background 0.18s ease;
+  }
+
+  .card:hover,
+  .session:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+  }
+
+  .stat:hover { transform: translateY(-1px); }
+
+  .tab .ico { transition: opacity 0.18s ease, color 0.18s ease; }
+
+  /* ---- 刷新时图标自转 ---- */
+  button.is-busy .bt-ico {
+    animation: ico-spin 0.9s linear infinite;
+  }
+
+  @keyframes ico-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ---- 进度条填充：改宽度时补间，不跳变 ---- */
+  .bar > i,
+  .modal .m-bar i {
+    transition: width 0.55s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  /* ---- 预警标识的呼吸微光（慢、低对比，不抢阅读） ---- */
+  .pill.warn,
+  .pill.high {
+    animation: pill-breathe 3.8s ease-in-out infinite;
+  }
+
+  .bar.warn > i,
+  .bar.high > i {
+    animation: bar-breathe 3.8s ease-in-out infinite;
+  }
+
+  @keyframes pill-breathe {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent); }
+    50% { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent); }
+  }
+
+  @keyframes bar-breathe {
+    0%, 100% { filter: drop-shadow(0 0 0 color-mix(in srgb, currentColor 0%, transparent)); }
+    50% { filter: drop-shadow(0 0 2.5px color-mix(in srgb, currentColor 45%, transparent)); }
+  }
+
+  /* 系统关掉动效时一律静止 */
+  @media (prefers-reduced-motion: reduce) {
+    button,
+    .theme-opt,
+    .tab,
+    .card,
+    .session,
+    .stat,
+    .bar > i,
+    .modal .m-bar i {
+      transition: none !important;
+    }
+    button:hover:not(:disabled),
+    .theme-opt:hover:not(:disabled),
+    .tab:hover,
+    button:active:not(:disabled),
+    .theme-opt:active:not(:disabled),
+    .tab:active,
+    .card:hover,
+    .session:hover,
+    .stat:hover {
+      transform: none !important;
+    }
+    .pill.warn,
+    .pill.high,
+    .bar.warn > i,
+    .bar.high > i,
+    button.is-busy .bt-ico {
+      animation: none !important;
+    }
+  }
+
+  /* 窄屏：侧边栏折成顶部一条横向滑动的导航带 */
+  @media (max-width: 900px) {
+    #app { grid-template-columns: minmax(0, 1fr); }
+    .sidebar {
+      position: static;
+      height: auto;
+      flex-direction: row;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+      overflow-x: auto;
+    }
+    .brand { padding: 0; white-space: nowrap; display: none; }
+    .brand .bk, .side-foot { display: none; }
+    .tabs { flex-direction: row; gap: 4px; }
+    .tab { width: auto; white-space: nowrap; padding: 7px 10px; }
+    .nav-sep { display: none; }
+    .main { padding: 18px 16px 56px; }
+  }
+
   @media (max-width: 760px) {
-    #app { padding: 22px 18px 60px; }
     .stats { flex-direction: column; }
     .split { grid-template-columns: 1fr; }
-    .tabs { gap: 18px; overflow-x: auto; }
   }
 </style>
 </head>
 <body>
 <div id="app">
-  <header class="top">
-    <div>
-      <div class="kicker">AstrBot · Extension Panel</div>
-      <h1>PLUTO panel<span class="h1-cn">（普鲁托面板）</span></h1>
-      <p class="sub">
-        读取 AstrBot 官方会话统计，查看每个会话的上下文占用、预警状态与清空操作。数据仅在打开面板时拉取，不做轮询。
-      </p>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="bm">PLUTO panel<em>（普鲁托面板）</em></div>
+      <div class="bk">AstrBot · Extension Panel</div>
     </div>
-    <div class="top-actions">
-      <button id="btn-refresh" type="button">刷新数据</button>
+
+    <nav class="tabs" role="tablist" aria-label="PLUTO panel 导航">
+      <button class="tab active" role="tab" id="tab-data" aria-selected="true" data-view="data">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18" /><path d="M6 20V11" /><path d="M11 20V5" /><path d="M16 20v-6" /><path d="M21 20v-9" /></svg>
+        <span>上下文监控</span>
+      </button>
+      <button class="tab" role="tab" id="tab-net" aria-selected="false" data-view="net">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></svg>
+        <span>搜索监控</span>
+      </button>
+      <button class="tab" role="tab" id="tab-douyin" aria-selected="false" data-view="douyin">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3" /><path d="M10.5 9.2l4.3 2.8-4.3 2.8z" /></svg>
+        <span>抖音浏览</span>
+      </button>
+      <button class="tab" role="tab" id="tab-risk" aria-selected="false" data-view="risk">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5.5c0 4.3-2.9 7.9-7 9.5-4.1-1.6-7-5.2-7-9.5V6z" /><path d="M9 12.3l2.1 2.1L15.3 10" /></svg>
+        <span>抖音风控调速</span>
+      </button>
+
+      <div class="nav-sep" role="presentation"></div>
+
+      <button class="tab" role="tab" id="tab-general" aria-selected="false" data-view="general">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="5" /><circle cx="9" cy="12" r="2.2" /></svg>
+        <span>行为</span>
+      </button>
+      <button class="tab" role="tab" id="tab-appearance" aria-selected="false" data-view="appearance">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2.5" /><path d="M8.5 20h7" /><path d="M12 16v4" /></svg>
+        <span>显示</span>
+      </button>
+      <button class="tab" role="tab" id="tab-proactive" aria-selected="false" data-view="proactive">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13.5a2 2 0 01-2 2H8.5L4.5 19V6a2 2 0 012-2h11.5a2 2 0 012 2z" /><path d="M8.5 9h7M8.5 12.5h4.5" /></svg>
+        <span>主动消息</span>
+      </button>
+      <button class="tab" role="tab" id="tab-carry" aria-selected="false" data-view="carry">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h16" /><path d="M5.5 8v9.5a2 2 0 002 2h9a2 2 0 002-2V8" /><path d="M9.5 4h5" /><path d="M12 11v4" /><path d="M9.8 13.2L12 15.4l2.2-2.2" /></svg>
+        <span>压缩承接</span>
+      </button>
+      <button class="tab" role="tab" id="tab-alert" aria-selected="false" data-view="alert">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16v-5a6 6 0 1112 0v5l1.8 2H4.2z" /><path d="M10 20.5a2.2 2.2 0 004 0" /></svg>
+        <span>阈值与播报</span>
+      </button>
+    </nav>
+
+    <div class="side-foot">
+      <div>读取 AstrBot 官方会话统计，查看上下文占用与预警状态。</div>
+      <div class="ver" style="margin-top:6px">数据仅在打开面板时拉取，不做轮询</div>
     </div>
-  </header>
+  </aside>
 
-  <nav class="tabs" role="tablist" aria-label="PLUTO panel 选项卡">
-    <button class="tab" role="tab" id="tab-general" aria-selected="true" data-view="general">通用设置</button>
-    <button class="tab" role="tab" id="tab-appearance" aria-selected="false" data-view="appearance">外观设置</button>
-    <button class="tab" role="tab" id="tab-data" aria-selected="false" data-view="data">数据面板</button>
-    <button class="tab" role="tab" id="tab-carry" aria-selected="false" data-view="carry">压缩承接</button>
-    <button class="tab" role="tab" id="tab-alert" aria-selected="false" data-view="alert">预警设置</button>
-  </nav>
+  <div class="main">
+    <header class="top">
+      <div>
+        <h1>PLUTO panel<span class="h1-cn">（普鲁托面板）</span></h1>
+      </div>
+      <div class="top-actions">
+        <button id="btn-refresh" type="button">刷新数据</button>
+      </div>
+    </header>
 
-  <div id="banner" class="banner"></div>
+    <div id="banner" class="banner"></div>
+
+  <!-- ============ 主动消息（原设置抽屉内的一段，现为独立页） ============ -->
+  <section class="panel-view" id="view-proactive" role="tabpanel">
+    <div class="card">
+      <h2>主动消息</h2>
+      <p class="hint">只在主人私聊生效。默认关闭；开启后按情绪等级与静默窗口，在你安静一段时间后偶尔主动找你。</p>
+      <div id="ps-params"><div class="ps-empty">读取中…</div></div>
+    </div>
+
+    <div class="card">
+      <h2>会话</h2>
+      <p class="hint">当前参与主动消息的会话，以及各自所在的位置。</p>
+      <div id="ps-sessions"><div class="ps-empty">读取中…</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>发送日志</h2>
+        <button class="ghost" type="button" id="ps-clear">清空</button>
+      </div>
+      <p class="hint">最近发出的主动消息，仅保留在本地面板。</p>
+      <div class="ps-log" id="ps-log"><div class="ps-empty">读取中…</div></div>
+    </div>
+  </section>
 
   <!-- ============ 通用设置 ============ -->
-  <section class="panel-view active" id="view-general" role="tabpanel">
+  <section class="panel-view" id="view-general" role="tabpanel">
     <div class="card">
       <h2>行为</h2>
       <p class="hint">控制机器人何时提醒你上下文快满了。</p>
@@ -808,6 +1152,17 @@
             <div class="switch" id="sw-debug" role="switch" aria-checked="false" tabindex="0"></div>
           </div>
         </div>
+        <div class="row" id="row-limit-override">
+          <div class="label">
+            <span class="tip" data-tip="自动读取会先看 Provider 配置的 max_context_tokens，再看模型元数据；两边都读不到时，在这里填模型真实窗口。填 0 恢复自动。">上下文上限（手动兜底）</span>
+            <span class="desc" id="limit-hint">自动读取中…</span>
+          </div>
+          <div class="control">
+            <input type="number" id="limit-override" min="0" max="10000000" step="1000" placeholder="0 = 自动" />
+            <em class="field-err" id="err-limit-override"></em>
+          </div>
+        </div>
+        <p class="micro">只有读不到真实窗口时才需要填；填写的值对所有会话生效，改完立即重算占比与剩余量。</p>
       </div>
     </div>
 
@@ -816,7 +1171,7 @@
       <p class="hint">面板里的每个数字都来自 AstrBot 自身，不做估算。</p>
       <ul class="cmd-list">
         <li><code>已用 Token</code><span>会话记录中最近一次 LLM 请求返回的 token 总数（官方 token_usage 字段）</span></li>
-        <li><code>窗口上限</code><span>Provider 配置的 max_context_tokens，未配置时按 models.dev 元数据解析</span></li>
+        <li><code>窗口上限</code><span>手动填写 &gt; Provider 的 max_context_tokens &gt; models.dev 元数据 &gt; 未设置；不会写死数字</span></li>
         <li><code>占用百分比</code><span>已用 ÷ 窗口上限；模型没有上限时显示「无法计算占比」</span></li>
       </ul>
     </div>
@@ -898,13 +1253,15 @@
   <section class="panel-view" id="view-data" role="tabpanel">
     <div class="stats">
       <div class="stat"><div class="k">会话数</div><div class="v" id="stat-sessions">—</div></div>
-      <div class="stat"><div class="k">最高占用</div><div class="v" id="stat-max">—<span class="u">%</span></div></div>
+      <div class="stat"><div class="k">最高占用</div><div class="v"><span id="stat-max">—</span><span class="u">%</span></div></div>
       <div class="stat"><div class="k">预警会话</div><div class="v" id="stat-warn">—</div></div>
     </div>
 
     <div class="list-meta">
       <span>数据时间 <span id="generated-at">尚未加载</span></span>
       <span class="list-acts">
+        <span id="empty-hint" class="idle-hint"></span>
+        <button id="btn-clear-empty" type="button" class="ghost danger-line">删除空会话</button>
         <span id="idle-hint" class="idle-hint"></span>
         <button id="btn-clear-idle" type="button" class="ghost danger-line">清理闲置网页会话</button>
         <button id="btn-refresh-2" type="button" class="ghost">重新读取</button>
@@ -919,7 +1276,7 @@
   <!-- ============ 压缩承接设置 ============ -->
   <section class="panel-view" id="view-carry" role="tabpanel">
     <div class="card">
-      <h2>自动压缩</h2>
+      <h2>压缩触发</h2>
       <p class="hint">只看当前会话：占用越过阈值时，把较早的对话压成一段摘要，会话 ID 不变，压前自动备份。</p>
       <div class="rows">
         <div class="row">
@@ -1036,6 +1393,246 @@
     </div>
   </section>
 
+
+
+  <!-- ============ 联网搜索 = ============ -->
+  <section class="panel-view" id="view-net" role="tabpanel">
+    <div class="card">
+      <h2>搜索概况</h2>
+      <p class="hint">数据来自 websearch 插件的本地日志表，这里只读不改。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="今天机器人一共发起了几次联网搜索。">今日搜索</span><span class="desc" id="net-today">—</span></div>
+          <div class="control"><span class="ro" id="net-total">共 0 次</span></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="成功次数与失败次数。">成功率</span><span class="desc" id="net-rate">—</span></div>
+          <div class="control"><span class="ro" id="net-avg">平均 0 ms</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>搜索记录</h2>
+      <div class="log-head">
+        <p class="hint">只记录关键词与耗时，不保存网页内容；最多保留最近 50 条。</p>
+        <button class="btn" id="btn-net-clear" type="button">清空日志</button>
+      </div>
+      <div class="net-search">
+        <input type="text" id="net-keyword" placeholder="按关键词过滤，例如 哪吒、手机、天气" maxlength="60" />
+        <button class="btn" id="btn-net-search" type="button">过滤</button>
+      </div>
+      <ul class="log-list" id="net-list">
+        <li class="log-empty">正在读取…</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ 抖音浏览 ============ -->
+  <section class="panel-view" id="view-douyin" role="tabpanel">
+    <div class="card">
+      <h2>游客浏览状态</h2>
+      <p class="hint">用独立浏览器以未登录游客身份打开抖音精选页，滚动看视频；不登录、不点赞、不评论、不搜索。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="开启后按设定间隔自动刷抖音；关闭则只有手动点「立即浏览」才会跑。">自动浏览</span>
+            <span class="desc" id="dy-run-state">正在读取…</span>
+          </div>
+          <div class="control">
+            <div class="switch" id="sw-dy-enabled" role="switch" aria-checked="false" tabindex="0"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="今天累计：成功浏览次数 / 看过的视频数 / 总时长。每天零点自动归零。">今日累计</span>
+            <span class="desc" id="dy-today">—</span>
+          </div>
+          <div class="control">
+            <button class="btn" id="btn-dy-run" type="button">立即浏览一次</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="每次浏览结束后会把看过视频的标题用一条 QQ 消息发给管理员。">结束通知</span>
+            <span class="desc">看完后把标题汇总成一条发到管理员 QQ</span>
+          </div>
+          <div class="control">
+            <div class="switch" id="sw-dy-notify" role="switch" aria-checked="true" tabindex="0"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>浏览策略</h2>
+      <p class="hint">数值改完立即保存。单次时长与条数同时生效，先到先停。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="两次自动浏览之间至少间隔多久，建议 120–360 分钟。">浏览间隔</span>
+            <span class="desc">分钟，最小 30</span>
+          </div>
+          <div class="control"><input type="number" id="dy-interval" min="30" max="720" step="10" /></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="一次最多跑多久，到点就关浏览器退出。">单次时长</span>
+            <span class="desc">分钟，建议 5–15</span>
+          </div>
+          <div class="control"><input type="number" id="dy-max-minutes" min="1" max="60" step="0.5" /></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="一次最多看几个视频，看够就停。">单次视频数</span>
+            <span class="desc">个，建议 5–12</span>
+          </div>
+          <div class="control"><input type="number" id="dy-max-videos" min="1" max="30" step="1" /></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="每天最多自动跑几次，防止刷太频繁。">每日次数上限</span>
+            <span class="desc">次，建议 2–4</span>
+          </div>
+          <div class="control"><input type="number" id="dy-sessions" min="1" max="10" step="1" /></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="这段时间内不自动浏览，避免半夜占网速。">免打扰时段</span>
+            <span class="desc">开始与结束小时（0–23），可跨零点</span>
+          </div>
+          <div class="control">
+            <input type="number" id="dy-quiet-start" min="0" max="23" step="1" />
+            <span class="value">:00 至</span>
+            <input type="number" id="dy-quiet-end" min="0" max="23" step="1" />
+            <span class="value">:00</span>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="填了就只汇报标题里含这些词的视频，多个词用逗号分隔；留空表示全都算。">关键词过滤</span>
+            <span class="desc">留空表示不过滤</span>
+          </div>
+          <div class="control"><input type="text" id="dy-keywords" maxlength="120" placeholder="AI,手机,数码" /></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="自动浏览只打开抖音精选页；遇到图形验证码会立即停止并通知。">安全说明</span>
+            <span class="desc">不登录、不点赞评论、不搜索，遇验证码自动停</span>
+          </div>
+          <div class="control"><span class="ro" id="dy-risk">0 次</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>最近浏览</h2>
+      <div class="log-head">
+        <p class="hint">只记录标题、时长与时间，不保存任何页面内容。</p>
+        <div class="list-acts">
+          <select class="mini-select" id="dy-session" aria-label="选择浏览会话"></select>
+          <button class="btn" id="btn-dy-refresh" type="button">刷新</button>
+        </div>
+      </div>
+      <ul class="log-list" id="dy-log-list">
+        <li class="log-empty">正在读取…</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ 抖音风控调速 ============ -->
+  <section class="panel-view" id="view-risk" role="tabpanel">
+    <div class="card">
+      <h2>风控严格系数</h2>
+      <p class="hint">系数越大风控越保守：同样一次验证会更快压到低档位，浏览参数也收得更紧。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="0.1 最宽松、2.0 最严格；改完立即保存，重启 AstrBot 仍生效。">严格系数</span>
+            <span class="desc">范围 0.1 ~ 2.0，默认 1.0</span>
+          </div>
+          <div class="control">
+            <input type="range" id="risk-range" min="0.1" max="2" step="0.1" value="1" />
+            <span class="value" id="risk-value">1.0</span>
+          </div>
+        </div>
+      </div>
+      <p class="micro">数值越大风控越严格，少量验证更容易降档；调小则更激进、回升也更快。</p>
+    </div>
+
+    <div class="card">
+      <h2>实时状态</h2>
+      <p class="hint">近 3 天加权风控分数：越新的验证权重越高，超过 3 天自动失效；本页每 5 秒自动刷新。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="正常 / 轻度降档 / 深度降档，档位决定下面对应的生效参数。">当前档位</span>
+          </div>
+          <div class="control"><span class="pill normal" id="risk-tier">—</span></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="最近 3 天每次验证按 24 小时半衰期加权后，再乘上面的严格系数。">当前风控分数</span>
+          </div>
+          <div class="control"><span class="value" id="risk-score">—</span></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="降档后需连续 90 分钟无验证才启动回升；回升同为 90 分钟，中途再触发验证会立刻打断并重置。">当前阶段</span>
+          </div>
+          <div class="control"><span class="value" id="risk-stage">—</span></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="最近一次命中抖音安全验证的时间；分数与计时都在内存里，重启 AstrBot 后清空。">最近一次验证</span>
+          </div>
+          <div class="control"><span class="ro" id="risk-last">—</span></div>
+        </div>
+      </div>
+      <div class="risk-track">
+        <div class="risk-track-head"><span>回升进度</span><span id="risk-progress-text">—</span></div>
+        <div class="bar" id="risk-bar"><i id="risk-bar-fill" style="width:0%"></i></div>
+        <p class="micro" id="risk-note">读取中…</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>当前生效参数</h2>
+      <p class="hint">算法按档位自动收放；主人口头指令（/dy_set）后 2 小时内优先按你设定的值走。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="深度降档时单次只看原设条数的 40%。">单次视频数</span>
+            <span class="desc">当前档位下的实际值</span>
+          </div>
+          <div class="control"><span class="value" id="risk-eff-videos">—</span></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="深度降档时单次时长压到原设的 50%。">单次时长</span>
+            <span class="desc">先到先停</span>
+          </div>
+          <div class="control"><span class="value" id="risk-eff-minutes">—</span></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="深度降档时两次自动浏览的间隔拉长到 2.2 倍。">浏览间隔</span>
+            <span class="desc">自动浏览的最小间隔</span>
+          </div>
+          <div class="control"><span class="value" id="risk-eff-interval">—</span></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="硬性底线 8 秒，任何档位都不会低于它。">单视频停留</span>
+            <span class="desc">底线 8 秒，任何档位都不破</span>
+          </div>
+          <div class="control"><span class="value" id="risk-eff-dwell">—</span></div>
+        </div>
+      </div>
+      <p class="micro" id="risk-override-note">—</p>
+    </div>
+  </section>
+
   <!-- ============ 预警设置 ============ -->
   <section class="panel-view" id="view-alert" role="tabpanel">
     <div class="card">
@@ -1083,9 +1680,10 @@
 
   <div class="footnote">
     <span>数据来自 AstrBot 官方会话与 Provider 配置 · 不估算、不联网</span>
-    <span id="foot-version">PLUTO panel v1.3.1</span>
+    <span id="foot-version">PLUTO panel v1.5.5</span>
   </div>
-</div>
+  </div><!-- /.main -->
+</div><!-- /#app -->
 
 <div class="modal-mask" id="modal-mask">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -1096,6 +1694,19 @@
     <p class="m-note" id="modal-note"></p>
     <div class="modal-actions">
       <button type="button" class="ghost" id="modal-close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="confirm-mask">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <h3 id="confirm-title">请确认</h3>
+    <p class="m-sub" id="confirm-sub"></p>
+    <p class="m-body" id="confirm-text"></p>
+    <p class="m-caution" id="confirm-caution" style="display:none"></p>
+    <div class="modal-actions">
+      <button type="button" class="ghost" id="confirm-cancel">取消</button>
+      <button type="button" class="strong" id="confirm-ok">继续</button>
     </div>
   </div>
 </div>
@@ -1211,6 +1822,18 @@
     el.style.setProperty("--fill", Math.max(0, Math.min(100, pct)).toFixed(1) + "%");
   }
 
+  /* 所有滑杆：先按当前值算一次填充比例，之后每次拖动都跟着走。
+     缺少这一步时圆点会动、蓝色填充条却停在上一次的值上，两者错位。 */
+  function bindRanges() {
+    var list = document.querySelectorAll('input[type="range"]');
+    for (var i = 0; i < list.length; i++) {
+      (function (el) {
+        syncRange(el);
+        el.addEventListener("input", function () { syncRange(el); });
+      })(list[i]);
+    }
+  }
+
   function applyZoom(zoom) {
     var z = Math.max(80, Math.min(140, Number(zoom) || 100));
     $("app").style.zoom = String(z / 100);
@@ -1265,9 +1888,9 @@
     var list = state.sessions || [];
     if (!list.length) {
       body.innerHTML = '<div class="empty">暂无会话数据。先和机器人聊两句，再回来刷新。</div>';
-      $("stat-sessions").textContent = "0";
-      $("stat-max").innerHTML = '—<span class="u">%</span>';
-      $("stat-warn").textContent = "0";
+      tweenNum($("stat-sessions"), 0);
+      tweenNum($("stat-max"), null);
+      tweenNum($("stat-warn"), 0);
       return;
     }
 
@@ -1283,9 +1906,19 @@
     state.idleCount = idleCount;
     var hint = $("idle-hint");
     if (hint) hint.textContent = idleCount ? ("闲置 " + idleCount + " 个") : "";
-    $("stat-sessions").textContent = String(list.length);
-    $("stat-max").innerHTML = (maxPct === null ? "—" : Number(maxPct).toFixed(1)) + '<span class="u">%</span>';
-    $("stat-warn").textContent = String(warnCount);
+
+    var emptyCount = list.filter(function (s) { return !s.used && !s.msg_count; }).length;
+    state.emptyCount = emptyCount;
+    var ehint = $("empty-hint");
+    if (ehint) ehint.textContent = emptyCount ? ("空会话 " + emptyCount + " 个") : "";
+    var ebtn = $("btn-clear-empty");
+    if (ebtn) {
+      ebtn.disabled = !emptyCount;
+      ebtn.style.opacity = emptyCount ? "1" : "0.55";
+    }
+    tweenNum($("stat-sessions"), list.length);
+    tweenNum($("stat-max"), maxPct === null ? null : Number(maxPct), { digits: 1 });
+    tweenNum($("stat-warn"), warnCount);
 
     var groups = { web: [], friend: [], group: [] };
     list.forEach(function (s) {
@@ -1306,6 +1939,7 @@
       if (s.limit) {
         sub = (s.percent === null ? "—" : s.percent.toFixed(1) + "%") +
           " · 剩余 " + fmt(s.remaining) + " · " + (s.model || "未知模型") +
+          (s.limit_source === "fallback" ? " · 上限为 AstrBot 兜底值，建议手动确认" : "") +
           (s.updated_at ? " · " + s.updated_at : "");
       } else {
         sub = "该模型未设置窗口上限，无法计算占比" + (s.model ? " · " + s.model : "");
@@ -1316,6 +1950,7 @@
             '<div class="who">' +
               '<span class="name" title="' + escapeAttr(s.web ? (s.note || s.display || s.umo) : s.umo) + '">' + escapeHtml(displayName(s)) + '</span>' +
               '<span class="pill ' + st.level + '">' + st.label + '</span>' +
+              (s.used === 0 ? '<span class="pill empty">空会话</span>' : '') +
               (s.parent_cid
                 ? '<button type="button" class="tag-carry" data-act="goto" data-target="' +
                   escapeAttr(s.parent_cid) + '" title="点击跳转到父会话">📌承接自:' +
@@ -1325,15 +1960,20 @@
             '<div class="figures">' + figures + '</div>' +
           '</div>' +
           '<div class="bar ' + (st.level === "high" ? "high" : st.level === "warn" ? "warn" : "") + '">' +
-            '<i style="width:' + pct.toFixed(1) + '%"></i>' +
+            '<i data-w="' + pct.toFixed(1) + '" style="width:0%"></i>' +
           '</div>' +
           '<div class="meta">' +
             '<span>' + escapeHtml(sub) + '</span>' +
             '<span class="acts row-acts">' +
               '<button type="button" data-act="stats" data-umo="' + escapeAttr(s.umo) + '" data-cid="' + escapeAttr(s.cid) + '">查看统计</button>' +
-              '<button type="button" data-act="compress" data-umo="' + escapeAttr(s.umo) + '" data-cid="' + escapeAttr(s.cid) + '">压缩上下文</button>' +
-              '<button type="button" data-act="continue" data-umo="' + escapeAttr(s.umo) + '" data-cid="' + escapeAttr(s.cid) + '">生成承接摘要</button>' +
-              '<button class="danger" type="button" data-act="clear" data-cid="' + escapeAttr(s.cid) + '">清空上下文</button>' +
+              (!s.limit || s.limit_source === "fallback"
+                ? '<button type="button" data-act="limit">设置上限</button>'
+                : '') +
+              (s.used > 0
+                ? '<button type="button" data-act="compress" data-umo="' + escapeAttr(s.umo) + '" data-cid="' + escapeAttr(s.cid) + '">压缩上下文</button>' +
+                  '<button type="button" data-act="continue" data-umo="' + escapeAttr(s.umo) + '" data-cid="' + escapeAttr(s.cid) + '">生成承接摘要</button>' +
+                  '<button class="danger" type="button" data-act="clear" data-cid="' + escapeAttr(s.cid) + '">清空上下文</button>'
+                : '') +
             '</span>' +
           '</div>' +
         '</div>';
@@ -1353,6 +1993,8 @@
       html += groups.group.map(row).join("");
     }
     body.innerHTML = html;
+    fillBars(body);
+    paintIcons(body);
   }
 
   function displayName(s) {
@@ -1372,24 +2014,200 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
+  /* ================= v1.5.4：图标与轻量动效的公共零件 =================
+     这三件事都只碰表现层：图标是插入的 <svg>，补间只改 style/文本，
+     不参与任何取数、保存或校验逻辑。 */
+
+  /* 统一线性图标：24×24 画布、2 描边（缩到 14px 后约 1.1px，和 12.5px 文字同重）、圆头圆角 */
+  var ICON_PATHS = {
+    refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3.5v5h-5"/>',
+    stats: '<path d="M3.5 3.2v17.3h17"/><path d="M8.4 17V11"/><path d="M13 17V6.6"/><path d="M17.6 17v-4.2"/>',
+    compress: '<path d="M9 3.6v3a1.8 1.8 0 0 1-1.8 1.8h-3"/><path d="M15 3.6v3a1.8 1.8 0 0 0 1.8 1.8h3"/><path d="M9 20.4v-3a1.8 1.8 0 0 0-1.8-1.8h-3"/><path d="M15 20.4v-3a1.8 1.8 0 0 1 1.8-1.8h3"/>',
+    summary: '<path d="M14 2.8H6.6a1.8 1.8 0 0 0-1.8 1.8v14.8a1.8 1.8 0 0 0 1.8 1.8h10.8a1.8 1.8 0 0 0 1.8-1.8V8z"/><path d="M14 2.8V8h5.2"/><path d="M8.6 13h6.8"/><path d="M8.6 16.8h4.6"/>',
+    trash: '<path d="M3.6 6.4h16.8"/><path d="M8.4 6.4V4.6a1.4 1.4 0 0 1 1.4-1.4h4.4a1.4 1.4 0 0 1 1.4 1.4v1.8"/><path d="M18.6 6.4l-.9 13.2a1.7 1.7 0 0 1-1.7 1.6H8a1.7 1.7 0 0 1-1.7-1.6L5.4 6.4"/>',
+    limit: '<path d="M3.6 8.2h9.2"/><path d="M17 8.2h3.4"/><circle cx="15" cy="8.2" r="1.9"/><path d="M3.6 15.8h3.4"/><path d="M11 15.8h9.4"/><circle cx="9" cy="15.8" r="1.9"/>',
+    filter: '<path d="M3.6 5.4h16.8l-6.6 7.8v6.2l-3.6-2v-4.2z"/>',
+    play: '<circle cx="12" cy="12" r="8.6"/><path d="M10.1 8.5l5.6 3.5-5.6 3.5z"/>',
+    arrow: '<path d="M4.4 12h14.6"/><path d="M13 6.2l5.8 5.8-5.8 5.8"/>',
+    archive: '<rect x="3.2" y="4.2" width="17.6" height="5" rx="1.3"/><path d="M5.1 9.2v9.6a1.5 1.5 0 0 0 1.5 1.5h10.8a1.5 1.5 0 0 0 1.5-1.5V9.2"/><path d="M10 13.4h4"/>',
+    close: '<path d="M6.2 6.2l11.6 11.6"/><path d="M17.8 6.2L6.2 17.8"/>',
+    check: '<path d="M4.6 12.6l4.8 4.8L19.4 7.4"/>'
+  };
+
+  /* 按钮 -> 图标名：先认 data-act（会话行里动态生成的），再认 id，最后按文案兜底 */
+  var ICON_BY_ACT = {
+    stats: "stats",
+    limit: "limit",
+    compress: "compress",
+    continue: "summary",
+    clear: "trash",
+    goto: "arrow",
+    backup: "archive"
+  };
+
+  var ICON_BY_ID = {
+    "btn-refresh": "refresh",
+    "btn-refresh-2": "refresh",
+    "btn-dy-refresh": "refresh",
+    "btn-dy-run": "play",
+    "btn-net-clear": "trash",
+    "btn-net-search": "filter",
+    "btn-clear-empty": "trash",
+    "btn-clear-idle": "trash",
+    "ps-clear": "trash",
+    "modal-close": "close",
+    "confirm-cancel": "close",
+    "confirm-ok": "check"
+  };
+
+  function iconNameFor(btn) {
+    if (btn.classList.contains("tab")) return "";        // 导航图标是手写的，别覆盖
+    if (btn.classList.contains("theme-opt")) return "";  // 主题卡里是色板，不是文字按钮
+    if (btn.classList.contains("tag-carry")) return "";   // 承接标签自带文字图标
+    var act = btn.getAttribute("data-act");
+    if (act && ICON_BY_ACT[act]) return ICON_BY_ACT[act];
+    if (btn.id && ICON_BY_ID[btn.id]) return ICON_BY_ID[btn.id];
+    var t = (btn.textContent || "").trim();
+    if (!t) return "";
+    if (t.indexOf("刷新") === 0 || t.indexOf("重新读取") === 0) return "refresh";
+    if (t.indexOf("查看统计") === 0) return "stats";
+    if (t.indexOf("压缩上下文") === 0) return "compress";
+    if (t.indexOf("生成承接摘要") === 0) return "summary";
+    if (t.indexOf("设置上限") === 0) return "limit";
+    if (t.indexOf("清空") === 0 || t.indexOf("删除") === 0 || t.indexOf("清理") === 0) return "trash";
+    if (t.indexOf("过滤") === 0) return "filter";
+    if (t.indexOf("立即浏览") === 0) return "play";
+    if (t.indexOf("关闭") === 0 || t.indexOf("取消") === 0) return "close";
+    if (t.indexOf("继续") === 0) return "check";
+    return "";
+  }
+
+  function iconSvg(name) {
+    return '<svg class="bt-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      ICON_PATHS[name] + "</svg>";
+  }
+
+  /* 给还没图标的按钮补一个，文字保持原位（图标插在最前面，按钮内文字节点不动） */
+  function paintIcons(root) {
+    var list = (root || document).querySelectorAll("button:not(.has-ico)");
+    for (var i = 0; i < list.length; i++) {
+      var btn = list[i];
+      if (btn.querySelector("svg")) { btn.classList.add("has-ico"); continue; }
+      var name = iconNameFor(btn);
+      if (!name) continue;
+      btn.insertAdjacentHTML("afterbegin", iconSvg(name));
+      btn.classList.add("has-ico");
+    }
+  }
+
+  /* 只在新按钮出现时才扫一遍，纯文本更新不触发 */
+  function watchIcons() {
+    if (!window.MutationObserver) return;
+    var queued = false;
+    var obs = new MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var added = records[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          var n = added[j];
+          if (n.nodeType !== 1) continue;
+          if (n.tagName === "BUTTON" || (n.querySelector && n.querySelector("button"))) {
+            if (!queued) {
+              queued = true;
+              requestAnimationFrame(function () { queued = false; paintIcons(document); });
+            }
+            return;
+          }
+        }
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  /* 数值补间：从当前显示值平滑走到目标值，避免刷新时数字直接跳 */
+  function tweenNum(el, to, opt) {
+    if (!el) return;
+    opt = opt || {};
+    var digits = opt.digits == null ? 0 : opt.digits;
+    var suffix = opt.suffix || "";
+    var dur = opt.dur || 460;
+    if (to === null || to === undefined || to === "" || !isFinite(Number(to))) {
+      el.textContent = "—";
+      return;
+    }
+    var target = Number(to);
+    var shown = parseFloat(String(el.textContent).replace(/[^\d.\-]/g, ""));
+    if (!isFinite(shown)) shown = 0;
+    if (Math.abs(target - shown) < 0.05) {
+      el.textContent = shown.toFixed(digits) + suffix;
+      return;
+    }
+    if (el._tweenRaf) cancelAnimationFrame(el._tweenRaf);
+    var t0 = 0;
+    function step(now) {
+      if (!t0) t0 = now;
+      var p = Math.min(1, (now - t0) / dur);
+      var eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = (shown + (target - shown) * eased).toFixed(digits) + suffix;
+      if (p < 1) el._tweenRaf = requestAnimationFrame(step);
+      else { el._tweenRaf = 0; el.textContent = target.toFixed(digits) + suffix; }
+    }
+    el._tweenRaf = requestAnimationFrame(step);
+  }
+
+  /* 进度条：模板里先给 width:0 + data-w，插入文档后再喂真实宽度，才有填充动效 */
+  function fillBars(root) {
+    var bars = (root || document).querySelectorAll(".bar > i[data-w]");
+    if (!bars.length) return;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        for (var i = 0; i < bars.length; i++) {
+          var bar = bars[i];
+          var w = Number(bar.getAttribute("data-w"));
+          if (!isFinite(w)) w = 0;
+          bar.style.width = Math.max(0, Math.min(100, w)).toFixed(1) + "%";
+        }
+      });
+    });
+  }
+
+  /* 请求进行中时让图标转起来；结束后至少留一小段，免得一闪而过 */
+  function spinWhile(btn, promise) {
+    if (!btn) return promise;
+    btn.classList.add("is-busy");
+    function done() {
+      setTimeout(function () { btn.classList.remove("is-busy"); }, 260);
+    }
+    if (promise && typeof promise.then === "function") {
+      promise.then(done, done);
+    } else {
+      done();
+    }
+    return promise;
+  }
+
   function escapeAttr(text) { return escapeHtml(text).replace(/"/g, "&quot;"); }
 
-  async function loadOverview(silent) {
+  async function loadOverview(silent, force) {
     if (state.loading) return;
     state.loading = true;
     var banner = $("banner");
     if (!silent) banner.classList.remove("show");
     if (!state.loaded) $("data-body").innerHTML = '<div class="empty">正在读取会话数据…</div>';
     try {
-      var data = await apiGet("overview");
+      var data = await apiGet("overview", force ? { force: 1 } : {});
       state.sessions = (data && data.sessions) || [];
       state.highPercent = (data && data.high_percent) || 95;
       state.idleDays = (data && data.idle_days_limit) || 7;
       state.idleCount = (data && data.idle_count) || 0;
+      state.limitOverride = (data && data.limit_override) || 0;
+      state.limitFallback = (data && data.limit_fallback) || 0;
+      state.limitHints = (data && data.limit_hints) || {};
       if (data && data.settings) applySettings(data.settings);
       state.loaded = true;
       $("generated-at").textContent = (data && data.generated_at) || "—";
       renderSessions();
+      renderLimitHint();
     } catch (err) {
       var msg = (err && err.message) || String(err);
       if (/未连接/.test(msg)) {
@@ -1406,11 +2224,40 @@
     }
   }
 
+  async function doClearEmpty() {
+    var count = state.emptyCount || 0;
+    if (!count) { toast("当前没有空会话"); return; }
+    var goEmpty = await askConfirm({
+      title: "删除空会话",
+      sub: "共 " + count + " 个 0 tokens 的会话",
+      text: "这些会话没有任何上下文内容，删除后不会再出现在列表里。",
+      caution: "空会话没有历史可保留；删除只影响这条空记录，不影响对应平台（QQ/网页）本身。",
+      okText: "删除",
+      danger: true
+    });
+    if (!goEmpty) return;
+    try {
+      var data = await apiPost("clear-empty", {});
+      toast("已删除 " + ((data && data.removed) || 0) + " 个空会话");
+      await loadOverview(true);
+    } catch (err) {
+      toast("删除失败：" + ((err && err.message) || err));
+    }
+  }
+
   async function doClearIdle() {
     var count = state.idleCount || 0;
     if (!count) { toast("当前没有闲置的网页会话"); return; }
     var days = state.idleDays || 7;
-    if (!window.confirm("将清空 " + count + " 个闲置网页会话（超过 " + days + " 天没有新消息），备注也会一起删掉，不可撤销。继续？")) return;
+    var goIdle = await askConfirm({
+      title: "清理闲置网页会话",
+      sub: "共 " + count + " 个，超过 " + days + " 天没有新消息",
+      text: "这些会话的上下文与备注会被一起删掉。",
+      caution: "此操作不可撤销，请确认这些网页对话不再需要。",
+      okText: "清空",
+      danger: true
+    });
+    if (!goIdle) return;
     try {
       var data = await apiPost("clear-idle", {});
       toast("已清理 " + ((data && data.removed) || 0) + " 个闲置网页会话");
@@ -1422,7 +2269,15 @@
 
   async function doClear(cid) {
     if (!cid) return;
-    if (!window.confirm("确认清空该会话的上下文？此操作不可撤销（插件会在本地备份一份旧记录）。")) return;
+    var goClear = await askConfirm({
+      title: "清空该会话上下文",
+      sub: "清空后该会话从 0 tokens 重新开始",
+      text: "插件会先把旧记录备份到本地，再清空历史。",
+      caution: "清空后原对话不再进入上下文，只有备份文件可回溯。",
+      okText: "清空",
+      danger: true
+    });
+    if (!goClear) return;
     try {
       await apiPost("clear", { cid: cid });
       toast("已清空该会话上下文");
@@ -1562,6 +2417,46 @@
 
   function closeModal() { $("modal-mask").classList.remove("show"); }
 
+  /* 面板内确认框：插件页在 iframe 里，window.confirm 会被浏览器吞掉，所以自绘一个 */
+  function askConfirm(opts) {
+    return new Promise(function (resolve) {
+      var mask = $("confirm-mask");
+      var ok = $("confirm-ok");
+      var cancel = $("confirm-cancel");
+      $("confirm-title").textContent = opts.title || "请确认";
+      $("confirm-sub").textContent = opts.sub || "";
+      $("confirm-text").textContent = opts.text || "";
+      var caution = $("confirm-caution");
+      if (opts.caution) {
+        caution.textContent = opts.caution;
+        caution.style.display = "";
+      } else {
+        caution.style.display = "none";
+      }
+      ok.textContent = opts.okText || "继续";
+      ok.className = "strong" + (opts.danger ? " dangerous" : "");
+      mask.classList.add("show");
+
+      function done(val) {
+        mask.classList.remove("show");
+        ok.removeEventListener("click", onOk);
+        cancel.removeEventListener("click", onCancel);
+        mask.removeEventListener("click", onMask);
+        document.removeEventListener("keydown", onKey);
+        resolve(val);
+      }
+      function onOk() { done(true); }
+      function onCancel() { done(false); }
+      function onMask(e) { if (e.target === mask) done(false); }
+      function onKey(e) { if (e.key === "Escape") done(false); }
+      ok.addEventListener("click", onOk);
+      cancel.addEventListener("click", onCancel);
+      mask.addEventListener("click", onMask);
+      document.addEventListener("keydown", onKey);
+      ok.focus();
+    });
+  }
+
   function findSession(umo, cid) {
     var list = state.sessions || [];
     for (var i = 0; i < list.length; i++) {
@@ -1607,7 +2502,7 @@
 
   async function doStats(umo, cid) {
     try {
-      var data = await apiPost("stats", { umo: umo, cid: cid });
+      var data = await apiPost("stats", { umo: umo, cid: cid, force: true });
       var pct = data.percent === null || data.percent === undefined ? 0 : Number(data.percent);
       var st = statusOf(pct);
       var rows = [
@@ -1619,22 +2514,91 @@
         ["对话轮数", (data.rounds || 0) + " 轮 / " + (data.messages || 0) + " 条消息"]
       ];
       var note = data.limit
-        ? (data.tip || "") + "（上限来源：" + (data.limit_source || "未知") + "）"
-        : "该模型没有配置窗口上限，无法计算占比；可先聊一句再刷新，或检查 Provider 的 max_context_tokens。";
+        ? (data.tip || "") + "（上限来源：" + limitSourceLabel(data.limit_source) + "，每次打开统计都会重新读取）"
+        : "未读到该模型的窗口上限，占比无法计算。可在右上角「⚙ 设置 → 行为」里手动填一个上限，填完立即生效。";
       showModal("会话统计", data.limit ? "实时读取 AstrBot 官方 token 统计" : "该模型未设置窗口上限，无法计算占比", st.level, pct, rows, note);
     } catch (err) {
       toast("读取上下文统计数据失败：" + ((err && err.message) || err));
     }
   }
 
+  function limitSourceLabel(source) {
+    return ({
+      manual: "手动填写",
+      provider: "Provider 配置",
+      metadata: "模型元数据",
+      fallback: "AstrBot 兜底值",
+      unset: "未设置"
+    })[source] || "未知";
+  }
+
+  function renderLimitHint() {
+    var input = $("limit-override");
+    var hint = $("limit-hint");
+    if (input) input.value = state.limitOverride ? String(state.limitOverride) : "";
+    if (!hint) return;
+    if (state.limitOverride) {
+      hint.textContent = "已手动设为 " + fmt(state.limitOverride) + " tokens（填 0 恢复自动）";
+      return;
+    }
+    var hints = state.limitHints || {};
+    var keys = Object.keys(hints);
+    if (!keys.length) {
+      hint.textContent = "自动读取中（暂无会话可判断）";
+      return;
+    }
+    var parts = keys.map(function (model) {
+      var item = hints[model] || {};
+      return model + " → " + (item.limit ? fmt(item.limit) + "（" + limitSourceLabel(item.source) + "）" : "未读到");
+    });
+    hint.textContent = "自动：" + parts.join("；");
+  }
+
+  function bindLimitOverride() {
+    var input = $("limit-override");
+    if (!input) return;
+    input.addEventListener("change", async function () {
+      var raw = String(input.value || "").trim();
+      var value = raw === "" ? 0 : Number(raw);
+      var err = $("err-limit-override");
+      if (err) err.textContent = "";
+      if (isNaN(value) || value < 0) {
+        if (err) err.textContent = "请填写数字";
+        return;
+      }
+      if (value !== 0 && (value < 1000 || value > 10000000)) {
+        if (err) err.textContent = "范围 1,000 ~ 10,000,000，或填 0 自动";
+        return;
+      }
+      try {
+        await apiPost("limit-override", { value: value });
+        toast(value ? ("上限已设为 " + fmt(value) + " tokens") : "已恢复自动读取上限");
+        await loadOverview(true, true);
+      } catch (e) {
+        if (err) err.textContent = "保存失败";
+        toast("保存失败：" + ((e && e.message) || e));
+      }
+    });
+  }
+
+  function focusLimitOverride() {
+    if (typeof window.__ppOpenBehavior === "function") window.__ppOpenBehavior();
+  }
+
   async function doCompress(umo, cid) {
     var keep = (carryState.carry && carryState.carry.keep_rounds) || 8;
     var s = findSession(umo, cid);
     var name = s ? displayName(s) : "该会话";
-    var tips = "将把「" + name + "」较早的对话压成一段摘要，保留最近 " + keep + " 轮，会话 ID 不变。\n\n" +
-      "【风险提示】压缩后较早的原文只剩摘要，请确认这部分历史不再需要逐字追溯；" +
-      "压缩前会自动把完整原文备份到插件备份目录（单会话最多 20 份），压缩日志里可点【查看备份】预览。\n\n继续？";
-    if (!window.confirm(tips)) return;
+    var tips = "将把「" + name + "」较早的对话压成一段摘要，保留最近 " + keep + " 轮，会话 ID 不变。";
+    var goCompress = await askConfirm({
+      title: "压缩上下文",
+      sub: "保留最近 " + keep + " 轮 · 会话 ID 不变",
+      text: tips,
+      caution: "压缩后较早的原文只剩摘要，请确认这部分历史不再需要逐字追溯；" +
+        "压缩前会自动把完整原文备份到插件备份目录（单会话最多 20 份），压缩日志里可点【查看备份】预览。",
+      okText: "压缩"
+    });
+    if (!goCompress) return;
     try {
       var data = await apiPost("compress", { umo: umo, cid: cid, keep: keep });
       toast(data.ok ? ("已压缩：" + fmt(data.before) + " → " + fmt(data.after) + " tokens") : (data.message || "压缩失败"));
@@ -1649,11 +2613,15 @@
     var keep = 4;
     var s = findSession(umo, cid);
     var name = s ? displayName(s) : "该会话";
-    var tips = "将把「" + name + "」的完整历史做成一段承接摘要，并新建一个会话切过去" +
-      "（新会话保留最近 " + keep + " 轮原文，并继承当前备注与摘要）。\n\n" +
-      "【行为说明】旧会话原样保留、数据不动，随时可用 /ctx_switch <前缀> 切回；" +
-      "承接之后你对机器人说的话都会记进新会话，面板里会显示「📌承接自」标签。\n\n继续？";
-    if (!window.confirm(tips)) return;
+    var tips = "将把「" + name + "」的完整历史做成一段承接摘要，并新建一个会话切过去（新会话保留最近 " + keep + " 轮原文，并继承当前备注与摘要）。";
+    var goContinue = await askConfirm({
+      title: "生成承接摘要",
+      sub: "新会话接管后续对话 · 旧会话原样保留",
+      text: tips,
+      caution: "旧会话数据不动，随时可用 /ctx_switch <前缀> 切回；承接之后你对机器人说的话都记进新会话，面板里会显示「📌承接自」标签。",
+      okText: "承接"
+    });
+    if (!goContinue) return;
     try {
       var data = await apiPost("continue", { umo: umo, cid: cid, keep: keep });
       toast(data.ok ? "已生成承接摘要并切换到新会话" : (data.message || "承接失败"));
@@ -1669,12 +2637,25 @@
     var tabs = document.querySelectorAll(".tab");
     tabs.forEach(function (tab) {
       tab.addEventListener("click", function () {
+        // 设置入口没有 data-view，它走自己的抽屉逻辑，别让它把主区清空
+        if (!tab.dataset.view) return;
         tabs.forEach(function (t) { t.setAttribute("aria-selected", t === tab ? "true" : "false"); });
         document.querySelectorAll(".panel-view").forEach(function (v) {
           v.classList.toggle("active", v.id === "view-" + tab.dataset.view);
         });
+        if (state.riskTimer) { clearInterval(state.riskTimer); state.riskTimer = null; }
+        // 换页时回到顶部，否则停在上一页的滚动位置会看着像没切
+        try { window.scrollTo({ top: 0, behavior: "auto" }); } catch (e) { window.scrollTo(0, 0); }
         if (tab.dataset.view === "data") loadOverview(true);
         if (tab.dataset.view === "carry") { loadCarry(); loadLog(); }
+        if (tab.dataset.view === "net") loadNet();
+        if (tab.dataset.view === "douyin") loadDy();
+        // 主动消息的数据在下面的独立闭包里，用挂到 window 的入口触发首次加载
+        if (tab.dataset.view === "proactive" && window.__ppLoadProactive) window.__ppLoadProactive();
+        if (tab.dataset.view === "risk") {
+          loadRisk();
+          state.riskTimer = setInterval(loadRisk, 5000);
+        }
       });
     });
   }
@@ -1729,6 +2710,7 @@
       state.settings.warn_percent = v;
       $("warn-range").value = String(Math.min(95, Math.max(50, v)));
       $("warn-number").value = String(v);
+      syncRange($("warn-range"));
       renderPreview();
       if (state.loaded) renderSessions();
       warnSave(v);
@@ -1738,11 +2720,16 @@
     $("warn-number").addEventListener("change", function (e) { setWarn(e.target.value); });
 
     $("btn-refresh").addEventListener("click", function () {
-      loadOverview(false).then(function () { toast("数据已刷新"); });
+      var p = loadOverview(false).then(function () { toast("数据已刷新"); });
+      spinWhile($("btn-refresh"), p);
     });
     var idleBtn = $("btn-clear-idle");
     if (idleBtn) idleBtn.addEventListener("click", doClearIdle);
-    $("btn-refresh-2").addEventListener("click", function () { loadOverview(false); });
+    var emptyBtn = $("btn-clear-empty");
+    if (emptyBtn) emptyBtn.addEventListener("click", doClearEmpty);
+    $("btn-refresh-2").addEventListener("click", function () {
+      spinWhile($("btn-refresh-2"), loadOverview(false, true));
+    });
 
     document.addEventListener("click", function (e) {
       var tag = e.target.closest && e.target.closest(".tag-carry");
@@ -1838,6 +2825,390 @@
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModal(); });
   }
 
+
+
+  /* ---------------- 联网搜索监控 ---------------- */
+  var netKeyword = "";
+
+  function esc(text) {
+    return String(text === undefined || text === null ? "" : text)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function highlight(text, kw) {
+    var safe = esc(text);
+    if (!kw) return safe;
+    try {
+      return safe.replace(new RegExp("(" + kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi"),
+        '<mark>$1</mark>');
+    } catch (e) { return safe; }
+  }
+
+  function renderNet(data) {
+    var stats = (data && data.stats) || {};
+    var rows = (data && data.rows) || [];
+    var today = $("net-today");
+    if (today) today.textContent = (stats.today || 0) + " 次";
+    var total = $("net-total");
+    if (total) total.textContent = "共 " + (stats.total || 0) + " 次";
+    var ok = stats.ok || 0, fail = stats.fail || 0;
+    var rate = ok + fail > 0 ? Math.round((ok / (ok + fail)) * 100) : 0;
+    var rateEl = $("net-rate");
+    if (rateEl) rateEl.textContent = "成功 " + ok + " / 失败 " + fail + "（" + rate + "%）";
+    var avg = $("net-avg");
+    if (avg) avg.textContent = "平均 " + (stats.avg_ms || 0) + " ms";
+
+    var box = $("net-list");
+    if (!box) return;
+    if (!rows.length) {
+      box.innerHTML = '<li class="log-empty">' + (data && data.db_found === false
+        ? "还没检测到搜索日志（websearch 插件还没跑过搜索）。" : "没有匹配的记录。") + "</li>";
+      return;
+    }
+    box.innerHTML = rows.map(function (row) {
+      var okRow = row.status === "ok";
+      return '<li class="log-item">' +
+        '<div class="log-row1"><span class="log-type ' + (okRow ? "" : "bad") + '">' + esc(row.provider || "deepseek") +
+        '</span><span class="log-time">' + esc(String(row.ts || "").slice(5, 16)) + "</span>" +
+        '<span class="log-pct">' + esc(row.count || 0) + " 条 · " + esc(row.took_ms || 0) + " ms</span></div>" +
+        '<div class="log-row2 net-query">' + highlight(row.query || "", netKeyword) + "</div>" +
+        "</li>";
+    }).join("");
+  }
+
+  async function loadNet() {
+    try {
+      var data = await apiPost("net-overview", { keyword: netKeyword });
+      renderNet(data || {});
+    } catch (err) {
+      toast("读取搜索日志失败：" + ((err && err.message) || err));
+    }
+  }
+
+  async function clearNet() {
+    var ok = await askConfirm({
+      title: "清空搜索日志",
+      sub: "共 N 条记录",
+      text: "只删除这份本地日志记录，不影响 websearch 插件的配置与统计。",
+      caution: "清空后无法恢复，但下次搜索会继续写入新记录。",
+      okText: "清空"
+    });
+    if (!ok) return;
+    try {
+      var data = await apiPost("net-clear", {});
+      toast("已清空 " + ((data && data.removed) || 0) + " 条记录");
+      loadNet();
+    } catch (err) {
+      toast("清空失败：" + ((err && err.message) || err));
+    }
+  }
+
+  function bindNet() {
+    var input = $("net-keyword");
+    if (input) {
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { netKeyword = input.value.trim(); loadNet(); }
+      });
+    }
+    var search = $("btn-net-search");
+    if (search) search.addEventListener("click", function () {
+      netKeyword = (($("net-keyword") || {}).value || "").trim();
+      loadNet();
+    });
+    var clear = $("btn-net-clear");
+    if (clear) clear.addEventListener("click", clearNet);
+  }
+
+  /* ---------------- 抖音浏览 ---------------- */
+  var dyInputs = ["dy-interval", "dy-max-minutes", "dy-max-videos", "dy-sessions",
+                  "dy-quiet-start", "dy-quiet-end", "dy-keywords"];
+
+  function dyCollect() {
+    function num(id) {
+      var el = $(id);
+      return el ? Number(el.value) : 0;
+    }
+    var swEn = $("sw-dy-enabled");
+    var swNo = $("sw-dy-notify");
+    return {
+      enabled: swEn && swEn.getAttribute("aria-checked") === "true",
+      notify: swNo && swNo.getAttribute("aria-checked") === "true",
+      interval_minutes: num("dy-interval"),
+      max_minutes: num("dy-max-minutes"),
+      max_videos: num("dy-max-videos"),
+      daily_sessions: num("dy-sessions"),
+      quiet_start: num("dy-quiet-start"),
+      quiet_end: num("dy-quiet-end"),
+      keywords: ($("dy-keywords") || {}).value || ""
+    };
+  }
+
+  var dySessions = [];
+  var dySessionId = "";
+  var lastDy = {};
+
+  /* 前端二次去重：同一会话里 video_id 相同的只保留一条（后端已去重，这里是兜底） */
+  function dyDedupe(items) {
+    var seen = {};
+    var out = [];
+    (items || []).forEach(function (it) {
+      if (!it) return;
+      var vid = String(it.video_id || "").trim();
+      var key = vid ? "v:" + vid : "t:" + String(it.title || "") + "|" + String(it.duration || "");
+      if (seen[key]) return;
+      seen[key] = 1;
+      out.push(it);
+    });
+    return out;
+  }
+
+  function dyNormalize(list) {
+    return (list || []).map(function (entry) {
+      var items = dyDedupe(entry.items || []);
+      return {
+        session_id: entry.session_id || "",
+        ts: entry.ts || "",
+        mode: entry.mode || "自动",
+        ok: entry.ok !== false,
+        risk: !!entry.risk,
+        error: entry.error || "",
+        minutes: Number(entry.watch_minutes != null ? entry.watch_minutes : (entry.minutes || 0)),
+        items: items,
+        count: items.length
+      };
+    });
+  }
+
+  function dyCurrent() {
+    for (var i = 0; i < dySessions.length; i++) {
+      if (dySessions[i].session_id === dySessionId) return dySessions[i];
+    }
+    return dySessions[0] || null;
+  }
+
+  function dyFillSessions() {
+    var sel = $("dy-session");
+    if (!sel) return;
+    if (!dySessions.length) {
+      sel.innerHTML = '<option value="">暂无记录</option>';
+      sel.disabled = true;
+      dySessionId = "";
+      return;
+    }
+    sel.disabled = false;
+    var exists = dySessions.some(function (s) { return s.session_id === dySessionId; });
+    if (!exists) dySessionId = dySessions[0].session_id;
+    sel.innerHTML = dySessions.map(function (s) {
+      var label = (s.ts || "").slice(5, 16) + " · " + s.mode + " · " + s.count + " 条";
+      return '<option value="' + esc(s.session_id) + '"' + (s.session_id === dySessionId ? " selected" : "") + ">" + esc(label) + "</option>";
+    }).join("");
+  }
+
+  function dyRenderStats() {
+    var st = (lastDy && lastDy.state) || {};
+    var cur = dyCurrent();
+    var today = $("dy-today");
+    if (today) {
+      var text = (st.sessions || 0) + " 次";
+      if (cur) text += " · 本次 " + cur.count + " 个视频 · " + cur.minutes + " 分钟";
+      today.textContent = text + (st.last_error ? "（上次异常：" + st.last_error + "）" : "");
+    }
+    renderDyLog(cur);
+  }
+
+  function applyDy(data) {
+    lastDy = data || {};
+    var s = (data && data.settings) || {};
+    var st = (data && data.state) || {};
+    function set(id, v) { var el = $(id); if (el && v !== undefined && v !== null) el.value = String(v); }
+    set("dy-interval", s.interval_minutes);
+    set("dy-max-minutes", s.max_minutes);
+    set("dy-max-videos", s.max_videos);
+    set("dy-sessions", s.daily_sessions);
+    set("dy-quiet-start", s.quiet_start);
+    set("dy-quiet-end", s.quiet_end);
+    var kw = $("dy-keywords");
+    if (kw) kw.value = s.keywords || "";
+    var swEn = $("sw-dy-enabled");
+    if (swEn) swEn.setAttribute("aria-checked", s.enabled ? "true" : "false");
+    var swNo = $("sw-dy-notify");
+    if (swNo) swNo.setAttribute("aria-checked", s.notify === false ? "false" : "true");
+
+    var stEl = $("dy-run-state");
+    if (stEl) {
+      if (st.running) stEl.textContent = "正在浏览中…";
+      else if (s.enabled) stEl.textContent = "已开启，上次浏览：" + (st.last_run || "还没跑过");
+      else stEl.textContent = "已关闭，上次浏览：" + (st.last_run || "还没跑过");
+    }
+    var risk = $("dy-risk");
+    if (risk) risk.textContent = (st.risk_hits || 0) + " 次";
+
+    dySessions = dyNormalize((data && data.sessions) || (data && data.log) || []);
+    dyFillSessions();
+    dyRenderStats();
+  }
+
+  function renderDyLog(session) {
+    var box = $("dy-log-list");
+    if (!box) return;
+    if (!session) {
+      box.innerHTML = '<li class="log-empty">还没有浏览记录。</li>';
+      return;
+    }
+    var items = session.items || [];
+    var ok = session.ok !== false && !session.risk;
+    var head = '<div class="log-row1"><span class="log-type ' + (ok ? "" : "bad") + '">' +
+      esc(session.mode) + "</span><span class='log-time'>" + esc(session.ts) +
+      "</span><span class='log-pct'>" + items.length + " 个 · " + session.minutes + " 分钟</span></div>";
+    var titles = items.slice(0, 8).map(function (it) {
+      return "<li>· " + esc(String(it.title || "").slice(0, 46)) + "</li>";
+    }).join("");
+    var note = session.risk ? '<div class="log-alert">遇到安全验证，已自动停止</div>'
+      : (session.error ? '<div class="log-alert">' + esc(session.error) + "</div>" : "");
+    box.innerHTML = '<li class="log-item">' + head + (titles ? "<ul class='log-titles'>" + titles + "</ul>" : "") + note + "</li>";
+  }
+
+  async function loadDy() {
+    try {
+      var data = await apiGet("dy-overview");
+      applyDy(data || {});
+    } catch (err) {
+      toast("读取抖音状态失败：" + ((err && err.message) || err));
+    }
+  }
+
+  async function saveDy() {
+    try {
+      await apiPost("dy-settings", dyCollect());
+      toast("抖音设置已保存");
+      await loadDy();
+    } catch (err) {
+      toast("保存失败：" + ((err && err.message) || err));
+    }
+  }
+
+  async function runDy() {
+    var btn = $("btn-dy-run");
+    if (btn) { btn.disabled = true; btn.textContent = "正在浏览…"; }
+    try {
+      var data = await apiPost("dy-run", {});
+      toast(data && data.started === false ? "上一次还在跑，稍等一下" : "已开始浏览，1-3 分钟后回来看结果");
+      setTimeout(function () {
+        if (btn) { btn.disabled = false; btn.textContent = "立即浏览一次"; }
+        loadDy();
+      }, 8000);
+    } catch (err) {
+      if (btn) { btn.disabled = false; btn.textContent = "立即浏览一次"; }
+      toast("启动失败：" + ((err && err.message) || err));
+    }
+  }
+
+  function bindDy() {
+    dyInputs.forEach(function (id) {
+      var el = $(id);
+      if (!el) return;
+      el.addEventListener("change", saveDy);
+    });
+    ["sw-dy-enabled", "sw-dy-notify"].forEach(function (id) {
+      var el = $(id);
+      if (!el) return;
+      function toggle() {
+        var next = el.getAttribute("aria-checked") !== "true";
+        el.setAttribute("aria-checked", next ? "true" : "false");
+        saveDy();
+      }
+      el.addEventListener("click", toggle);
+      el.addEventListener("keydown", function (e) {
+        if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); }
+      });
+    });
+    var run = $("btn-dy-run");
+    if (run) run.addEventListener("click", function () { spinWhile(run, runDy()); });
+    var refresh = $("btn-dy-refresh");
+    if (refresh) refresh.addEventListener("click", function () { spinWhile(refresh, loadDy()); });
+    var sel = $("dy-session");
+    if (sel) sel.addEventListener("change", function () {
+      dySessionId = sel.value;
+      dyRenderStats();
+    });
+  }
+
+  // ------------------------------------------------------------------ //
+  // 抖音风控调速（v1.5.0）
+  // ------------------------------------------------------------------ //
+  function riskTierClass(key) {
+    if (key === "deep") return "high";
+    if (key === "light") return "warn";
+    return "normal";
+  }
+
+  function riskNote(d) {
+    if (d.stage_key === "waiting") {
+      return "降档中：需连续无验证到 " + (d.recover_at || "—") + " 才开始回升（当前进度 " +
+        Math.round(d.progress || 0) + "%）。";
+    }
+    if (d.stage_key === "ramping") {
+      return "回升中：参数正在匀速放回正常档位，预计 " + (d.normal_at || "—") + " 完全恢复。";
+    }
+    return d.override ? "主人口头指令优先中：算法暂停压缩参数。" : "运行正常：参数为面板设定的原始值。";
+  }
+
+  async function loadRisk() {
+    var d = null;
+    try { d = await apiGet("risk-status"); } catch (e) { d = null; }
+    if (!d || d.error) {
+      $("risk-note").textContent = (d && d.error) || "读取风控状态失败，稍后自动重试。";
+      return;
+    }
+    state.risk = d;
+    var tier = $("risk-tier");
+    tier.textContent = d.tier || "—";
+    tier.className = "pill " + riskTierClass(d.tier_key);
+    $("risk-score").textContent = (Number(d.score_raw || 0)).toFixed(2);
+    $("risk-stage").textContent = d.stage || "—";
+    $("risk-last").textContent = d.last_verified || "还没有触发过验证";
+    tweenNum($("risk-progress-text"), Math.round(Number(d.progress || 0)), { suffix: "%" });
+    var fill = $("risk-bar-fill");
+    fill.style.width = Math.max(0, Math.min(100, Number(d.progress || 0))) + "%";
+    $("risk-bar").className = "bar" + (d.tier_key === "deep" ? " high" : (d.tier_key === "light" ? " warn" : ""));
+    $("risk-note").textContent = riskNote(d);
+
+    var eff = d.effective || {};
+    $("risk-eff-videos").textContent = (eff.videos == null ? "—" : eff.videos + " 个");
+    $("risk-eff-minutes").textContent = (eff.minutes == null ? "—" : eff.minutes + " 分钟");
+    $("risk-eff-interval").textContent = (eff.interval == null ? "—" : Math.round(Number(eff.interval)) + " 分钟");
+    $("risk-eff-dwell").textContent = (eff.dwell_min == null ? "—" : eff.dwell_min + " ~ " + eff.dwell_max + " 秒");
+    $("risk-override-note").textContent = d.override
+      ? "主人口头指令生效中，还剩 " + (d.override_minutes_left || 0) + " 分钟优先期；也可以直接把系数调小。"
+      : (d.cooldown_until ? "验证冷却至 " + d.cooldown_until + "，冷却期内不会自动重试。" : "当前无冷却。");
+
+    var range = $("risk-range");
+    if (range && document.activeElement !== range) {
+      range.value = Number(d.strictness || 1).toFixed(1);
+      $("risk-value").textContent = Number(d.strictness || 1).toFixed(1);
+      syncRange(range);
+    }
+  }
+
+  function bindRisk() {
+    var range = $("risk-range");
+    if (!range) return;
+    range.addEventListener("input", function () {
+      $("risk-value").textContent = Number(range.value).toFixed(1);
+    });
+    range.addEventListener("change", async function () {
+      var v = Math.round(Number(range.value) * 10) / 10;
+      try {
+        await apiPost("risk-settings", { strictness: v });
+        toast("已保存严格系数 " + v.toFixed(1));
+      } catch (e) {
+        toast("保存失败，稍后再试");
+      }
+      loadRisk();
+    });
+  }
+
   function dispatchAct(btn) {
     var act = btn.getAttribute("data-act");
     var umo = btn.getAttribute("data-umo") || "";
@@ -1848,6 +3219,7 @@
     else if (act === "continue") doContinue(umo, cid);
     else if (act === "goto") gotoSession(btn.getAttribute("data-target") || "");
     else if (act === "backup") previewBackup(cid, btn.getAttribute("data-name") || "");
+    else if (act === "limit") focusLimitOverride();
   }
 
   async function boot() {
@@ -1856,7 +3228,18 @@
     bindSwitch("sw-broadcast", "auto_broadcast");
     bindSwitch("sw-debug", "debug_log");
     bindSwitch("sw-tooltip", "tooltip");
+    bindDy();
+    bindNet();
+    bindRisk();
+    bindLimitOverride();
     applySettings(state.settings);
+
+    // v1.5.4：滑杆填充比例随值同步（拖动、程序赋值都要跟得上）
+    bindRanges();
+
+    // v1.5.4：先给静态按钮补图标，再盯着后续动态插入的按钮
+    paintIcons(document);
+    watchIcons();
 
     var bridge = getBridge();
     if (!bridge) {
@@ -1880,6 +3263,244 @@
     await loadCarry();
     state.loaded = true; // 首次加载完成后再允许静默刷新
   }
+
+
+  /* ================= v1.4.1：主动消息 =================
+     v1.5.3：原「设置」抽屉拆成左侧一级菜单，这里只留主动消息的数据与交互。 */
+  (function () {
+    var psLoaded = false;
+
+    function $id(id) { return document.getElementById(id); }
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    function bindShell() {
+      var clear = $id("ps-clear");
+      if (clear) clear.addEventListener("click", clearPsLog);
+    }
+
+    /* ---------------- 主动消息 ---------------- */
+    function psSwitch(id, on, key) {
+      var sw = document.createElement("div");
+      sw.className = "switch";
+      sw.id = id;
+      sw.setAttribute("role", "switch");
+      sw.setAttribute("tabindex", "0");
+      sw.setAttribute("aria-checked", on ? "true" : "false");
+      function toggle() {
+        var next = sw.getAttribute("aria-checked") !== "true";
+        sw.setAttribute("aria-checked", next ? "true" : "false");
+        var patch = {}; patch[key] = next;
+        psSave(patch);
+      }
+      sw.addEventListener("click", toggle);
+      sw.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+      });
+      return sw;
+    }
+
+    function psInput(id, value, step, min, max, key, suffix) {
+      var wrap = document.createElement("div");
+      wrap.className = "ctl";
+      var input = document.createElement("input");
+      input.type = "number";
+      input.id = id;
+      input.value = value;
+      input.step = step; input.min = min; input.max = max;
+      input.style.width = "86px";
+      input.addEventListener("change", function () {
+        var v = Number(input.value);
+        if (isNaN(v)) v = Number(min);
+        v = Math.max(Number(min), Math.min(Number(max), v));
+        input.value = v;
+        var patch = {}; patch[key] = v;
+        psSave(patch);
+      });
+      wrap.appendChild(input);
+      if (suffix) {
+        var unit = document.createElement("span");
+        unit.className = "sub"; unit.textContent = suffix;
+        wrap.appendChild(unit);
+      }
+      return wrap;
+    }
+
+    function psRow(label, sub, control) {
+      var row = document.createElement("div");
+      row.className = "ps-line";
+      var left = document.createElement("div");
+      var l = document.createElement("div"); l.className = "lab"; l.textContent = label;
+      left.appendChild(l);
+      if (sub) { var s = document.createElement("div"); s.className = "sub"; s.textContent = sub; left.appendChild(s); }
+      row.appendChild(left);
+      row.appendChild(control);
+      return row;
+    }
+
+    function renderPsParams(cfg) {
+      var host = $id("ps-params");
+      if (!host) return;
+      host.innerHTML = "";
+      host.appendChild(psRow("启用主动消息", "总开关；关闭后不再主动发任何消息", psSwitch("ps-enabled", !!cfg.enabled, "enabled")));
+      host.appendChild(psRow("反馈自适应", "根据你回不回、回多长，自动调整频率", psSwitch("ps-adaptive", !!cfg.adaptive, "adaptive")));
+      host.appendChild(psRow("柔和模式", "语气更轻，避免打扰感", psSwitch("ps-soft_mode", !!cfg.soft_mode, "soft_mode")));
+      host.appendChild(psRow("私聊 / 群聊", "群聊默认关闭，避免在群里刷存在感", (function () {
+        var d = document.createElement("div"); d.className = "ctl";
+        d.appendChild(psSwitch("ps-private", !!cfg.private_enabled, "private_enabled"));
+        d.appendChild(psSwitch("ps-group", !!cfg.group_enabled, "group_enabled"));
+        return d;
+      })()));
+      host.appendChild(psRow("最短间隔", "两条主动消息之间的最小间隔", psInput("ps-min_interval", cfg.min_interval, 0.5, 0.5, 1440, "min_interval", "分钟")));
+      host.appendChild(psRow("随机浮动", "在最短间隔上叠加的随机量，避免太规律", psInput("ps-jitter", cfg.jitter, 1, 0, 120, "jitter", "分钟")));
+      host.appendChild(psRow("单会话每日上限", "当天最多主动发几条", psInput("ps-daily_max", cfg.daily_max, 1, 0, 50, "daily_max", "条")));
+      host.appendChild(psRow("无视判定", "多久没回视为被无视，会拉长冷却", psInput("ps-ignore_after_min", cfg.ignore_after_min, 5, 5, 1440, "ignore_after_min", "分钟")));
+      host.appendChild(psRow("对话优先静默", "你刚发过消息后的一段时间内不打扰", psInput("ps-idle_guard", cfg.idle_guard_seconds, 10, 30, 3600, "idle_guard_seconds", "秒")));
+    }
+
+    function renderPsSessions(list) {
+      var host = $id("ps-sessions");
+      if (!host) return;
+      if (!list || !list.length) {
+        host.innerHTML = '<div class="ps-empty">还没有会话主动找过你。等你和它聊过、且过了静默窗口，这里会出现候选会话。</div>';
+        return;
+      }
+      host.innerHTML = "";
+      list.forEach(function (s) {
+        var box = document.createElement("div");
+        box.className = "ps-sess";
+        var head = document.createElement("div");
+        head.className = "head";
+        var name = document.createElement("span");
+        name.className = "name";
+        name.textContent = s.label || s.umo || "";
+        head.appendChild(name);
+        var ctl = document.createElement("div");
+        ctl.className = "ctl";
+        var reset = document.createElement("button");
+        reset.className = "ghost"; reset.type = "button"; reset.textContent = "重置";
+        reset.addEventListener("click", function () { psReset(s.umo, reset); });
+        ctl.appendChild(reset);
+        head.appendChild(ctl);
+        box.appendChild(head);
+        var meta = document.createElement("div");
+        meta.className = "meta";
+        var bits = [];
+        bits.push("今日 " + (s.today || 0) + " 条");
+        if (s.cooling) bits.push("冷却中 " + Math.round((s.cooling_left || 0) / 60) + " 分钟");
+        if (s.last_sent) bits.push("上次 " + s.last_sent);
+        if (s.enabled === 0) bits.push("已单独关闭");
+        if (s.min_interval != null) bits.push("间隔 " + s.min_interval + " 分钟");
+        meta.textContent = bits.join(" · ");
+        box.appendChild(meta);
+        host.appendChild(box);
+      });
+    }
+
+    function renderPsLog(items) {
+      var host = $id("ps-log");
+      if (!host) return;
+      if (!items || !items.length) {
+        host.innerHTML = '<div class="ps-empty">还没有发送记录。开启后，每次尝试（含跳过）都会记在这里。</div>';
+        return;
+      }
+      host.innerHTML = "";
+      items.slice(0, 60).forEach(function (it) {
+        var box = document.createElement("div");
+        box.className = "it";
+        var meta = document.createElement("div");
+        meta.className = "meta";
+        var badge = document.createElement("span");
+        var status = String(it.status || "sent");
+        badge.className = "badge" + (status === "sent" ? "" : " skip");
+        badge.textContent = status === "sent" ? "已发送" : (status === "skip" ? "跳过" : status);
+        meta.appendChild(badge);
+        var ts = document.createElement("span"); ts.textContent = it.ts || ""; meta.appendChild(ts);
+        if (it.source) { var src = document.createElement("span"); src.textContent = it.source; meta.appendChild(src); }
+        box.appendChild(meta);
+        var txt = document.createElement("div");
+        txt.className = "txt";
+        txt.textContent = it.content || "";
+        box.appendChild(txt);
+        host.appendChild(box);
+      });
+    }
+
+    async function psSave(patch) {
+      try {
+        await apiPost("proactive-settings", patch);
+        toast("已保存");
+      } catch (err) {
+        toast("保存失败：" + ((err && err.message) || err));
+      }
+    }
+
+    async function psReset(umo, btn) {
+      try {
+        if (btn) btn.disabled = true;
+        await apiPost("proactive-reset", { umo: umo });
+        toast("已重置该会话");
+        loadProactive(true);
+      } catch (err) {
+        toast("重置失败：" + ((err && err.message) || err));
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function clearPsLog() {
+      var ok = await askConfirm({
+        title: "清空发送日志",
+        sub: "只清日志，不改配置",
+        text: "清空后无法恢复，但新的发送记录会继续写入。",
+        okText: "清空"
+      });
+      if (!ok) return;
+      try {
+        var d = await apiPost("proactive-clear", {});
+        toast("已清空 " + ((d && d.removed) || 0) + " 条");
+        loadProactive(true);
+      } catch (err) {
+        toast("清空失败：" + ((err && err.message) || err));
+      }
+    }
+
+    async function loadProactive(force) {
+      if (psLoaded && !force) return;
+      try {
+        var d = await apiGet("proactive-overview");
+        var cfg = (d && d.settings) || {};
+        renderPsParams(cfg);
+        renderPsSessions((d && d.sessions) || []);
+        renderPsLog((d && d.log) || []);
+        psLoaded = true;
+      } catch (err) {
+        var p = $id("ps-params");
+        if (p) p.innerHTML = '<div class="ps-empty">读取主动消息数据失败：' + esc((err && err.message) || err) + '</div>';
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", function () {
+      bindShell();
+      // 供 bindTabs 在切到「主动消息」时触发首次拉取
+      window.__ppLoadProactive = function () { loadProactive(); };
+      var cur = document.querySelector(".tab.active");
+      var view = (cur && cur.dataset && cur.dataset.view) || "data";
+      document.querySelectorAll(".panel-view").forEach(function (v) {
+        v.classList.toggle("active", v.id === "view-" + view);
+      });
+      // 外部入口（旧版「跳去设置里改上限」的链接）仍可直接落到「行为」页
+      window.__ppOpenBehavior = function () {
+        var btn = document.getElementById("tab-general");
+        if (btn) btn.click();
+        var el = document.getElementById("limit-override");
+        if (el) { el.focus(); el.select && el.select(); }
+      };
+    });
+  })();
 
   window.addEventListener("DOMContentLoaded", boot);
 })();

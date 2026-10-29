@@ -36,7 +36,8 @@ $target = Join-Path $stage $PluginName
 New-Item -ItemType Directory -Path $target -Force | Out-Null
 
 $skipDirs = @("__pycache__", "data", "dist", ".git", ".venv", "venv", "carry_backups", ".github", "tools")
-$skipFiles = @("settings.json", "session_meta.json", "compress_log.json", "PUBLISHING.md")
+$skipFiles = @("settings.json", "session_meta.json", "compress_log.json", "PUBLISHING.md", "BUG修复说明-v1.4.0.md")
+$skipFilePatterns = @("更新说明-*.md")
 
 Write-Host ""
 Write-Host "  插件目录 : $Root"
@@ -51,6 +52,8 @@ Get-ChildItem -Path $Root -Recurse -Force | ForEach-Object {
     if ($parts[0] -in $skipDirs) { return }
     if ($_.PSIsContainer) { return }
     if ($_.Name -in $skipFiles) { return }
+    foreach ($pat in $skipFilePatterns) { if ($_.Name -like $pat) { return } }
+    if ($_.Name -like "*.bak-*" -or $_.Name -like "*.bak") { return }
     if ($_.Extension -in @(".log", ".zip", ".pyc")) { return }
     $dest = Join-Path $target $rel
     $destDir = Split-Path -Parent $dest
