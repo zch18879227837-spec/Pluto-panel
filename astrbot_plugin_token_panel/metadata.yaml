@@ -1,0 +1,7 @@
+name: astrbot_plugin_token_panel
+display_name: PLUTO panel（普鲁托面板）
+author: Charon
+version: 1.5.5
+desc: PLUTO panel（普鲁托面板）是会话上下文 Token 用量的可视化面板：进度条、预警阈值、自动播报与一键清空；内置上下文统计（/ctx）、上下文压缩与承接（/ctx_compress、/ctx_continue、/ctx_sessions、/ctx_switch），支持扩展功能内置页面视图与 /token_* 指令；内置精细化主动消息（情绪等级、静默期、反重复）与联网搜索 / 抖音浏览监控；风控调速（近 3 天加权分数、90 分钟回升周期、硬性 8 秒停留底线）。
+short_desc: PLUTO panel：Token 面板 + 上下文压缩承接 + 主动消息
+repo: ""

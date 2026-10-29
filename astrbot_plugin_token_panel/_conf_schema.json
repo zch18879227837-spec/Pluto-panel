@@ -1,0 +1,46 @@
+{
+  "style": {
+    "type": "string",
+    "description": "默认配色风格",
+    "hint": "claude = Claude Code 风格（陶匠橙）；deepseek = DeepSeek 蓝调（#0066FF）。面板里选中后会写入本地 settings.json 优先于此项",
+    "default": "claude",
+    "options": ["claude", "deepseek"]
+  },
+  "theme": {
+    "type": "string",
+    "description": "默认主题",
+    "hint": "ivory = 象牙白画布，ink = 纯黑画布。面板里选中后会写入本地 settings.json 优先于此项",
+    "default": "ivory",
+    "options": ["ivory", "ink"]
+  },
+  "zoom": {
+    "type": "int",
+    "description": "页面缩放（%）",
+    "hint": "80 ~ 140 之间，默认 100",
+    "default": 100
+  },
+  "tooltip": {
+    "type": "bool",
+    "description": "悬浮参数提示",
+    "hint": "鼠标悬浮参数项时显示轻量说明；关闭后不再弹出",
+    "default": true
+  },
+  "warn_percent": {
+    "type": "int",
+    "description": "预警阈值（%）",
+    "hint": "达到该占比时黄色预警；高危线固定 95%",
+    "default": 80
+  },
+  "auto_broadcast": {
+    "type": "bool",
+    "description": "自动进度播报",
+    "hint": "仅当会话用量越过预警阈值时推送一次，同一会话 30 分钟内不会重复播报",
+    "default": true
+  },
+  "debug_log": {
+    "type": "bool",
+    "description": "调试日志",
+    "hint": "打开后把读取失败、面板请求等细节写进 AstrBot 日志，便于排查",
+    "default": false
+  }
+}
