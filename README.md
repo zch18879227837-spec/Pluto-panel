@@ -2,7 +2,7 @@
 
 > AstrBot 的会话上下文可视化面板：看得见 token 用量，也管得住上下文。
 
-[![Version](https://img.shields.io/badge/version-1.10.2-2F5FD8)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.10.3-2F5FD8)](CHANGELOG.md)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.11.4-4176E6)](https://github.com/AstrBotDevs/AstrBot)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-3DA639)](LICENSE)
@@ -102,7 +102,7 @@ git clone https://github.com/<your-name>/astrbot_plugin_token_panel.git
 ```
 
 目录结构必须是 `data/plugins/astrbot_plugin_token_panel/`（外层文件夹名与插件 id 一致），否则面板路由不会注册。
-放好后在后台点「重载」，日志出现 `[token_panel] 1.10.2 初始化完成` 即成功。
+放好后在后台点「重载」，日志出现 `[token_panel] 1.10.3 初始化完成` 即成功。
 
 ### 依赖
 
@@ -274,6 +274,7 @@ astrbot_plugin_token_panel/
 
 完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。近期重点：
 
+- **v1.10.3** 文档与开源配套：界面结构图替代截图内嵌、CHANGELOG 补全 23 个版本
 - **v1.10.2** 统一事件日志（SQLite + JSONL、面板维护页）
 - **v1.10.1 / v1.9.1** 会话置顶：左右同步与视觉统一
 - **v1.10.0** 「何时该搜」写进人设，工具说明与指令一致

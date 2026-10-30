@@ -53,7 +53,7 @@ from .tts_module import (
 )
 
 PLUGIN_NAME = "astrbot_plugin_token_panel"
-PLUGIN_VERSION = "1.10.2"
+PLUGIN_VERSION = "1.10.3"
 PAGE_PREFIX = f"/{PLUGIN_NAME}/page"
 
 # 高危线固定 95%（需求写死），预警线可在面板/指令里调整

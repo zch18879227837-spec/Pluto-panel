@@ -10,6 +10,7 @@ PLUTO panel（普鲁托面板）的版本变更记录。格式参考 [Keep a Cha
 
 | 版本 | 日期 | 主线 |
 | --- | --- | --- |
+| 1.10.3 | 2026-10-31 | 文档与开源配套、界面结构图替代截图内嵌 |
 | 1.10.2 | 2026-10-30 | 统一事件日志、面板「事件日志」页 |
 | 1.10.1 | 2026-10-30 | 右侧会话栏补齐置顶标记 |
 | 1.10.0 | 2026-10-29 | 「何时该搜」写入人设，交由模型自主判断 |
@@ -31,6 +32,36 @@ PLUTO panel（普鲁托面板）的版本变更记录。格式参考 [Keep a Cha
 - 事件日志的附加字段（`extra`）在面板内展开查看
 - 检索日志按会话聚合，支持「这次回答用了哪几条搜索结果」回溯
 - 压缩/承接结果的差异对比视图
+
+---
+
+## [1.10.3] - 2026-10-31
+
+一次只动文档与打包的小版本，面板运行时逻辑与 1.10.2 完全一致。
+
+### Fixed — README 截图在后台文档栏裂图
+
+- 根因：`astrbot/dashboard/services/plugin_service.py:1943 get_plugin_readme()` 只把 README 读成纯文本返回，不重写图片路径；`astrbot/dashboard/api/static_files.py` 的静态路由只服务后台自身 SPA 资源，未挂插件目录。于是 `assets/screenshots/x.jpg` 被解析为 `http://127.0.0.1:6185/assets/screenshots/x.jpg`，必然 404。
+- 处理：删除「界面预览」的 6 张内嵌截图，改为纯文本「界面结构」——ASCII 三栏布局图 + 主题令牌表，GitHub、插件市场、后台文档栏均可完整阅读。
+- 截图保留在仓库 `assets/screenshots/`（7 张，暗/亮两套），README 用一句说明指向目录，不再内嵌。
+- 截图重新采集时注入脱敏：会话标题里的 QQ 号替换为「示例用户」，绝对路径只留末两级。
+
+### Added — 开源配套
+
+- `README.md` 重写：12 页功能表、三种安装方式、依赖、主题令牌、33 条指令速查、数据与隐私、10 条 FAQ、目录结构、协议。
+- `CHANGELOG.md` 补全 v1.0.0 → v1.10.2 共 23 个版本的 Added / Changed / Fixed / Notes。
+- `.gitignore`（缓存、日志、本地配置、模型、临时打包）与 `docs/GITHUB-META.md`（仓库简介、英文 about、Topics）。
+- 关键函数补英文注释：`main.py` 设置读写与置顶、`eventlog.py` 写入/清理、`websearch.py` 检索、`proactive.py` 并发占位、`notify.py` 通知生命周期等，仅注释不改逻辑。
+
+### Changed
+
+- `_conf_schema.json` 的 `style` 收敛为仅 `deepseek` 可选项、默认 `deepseek`，hint 注明历史 `claude` 值仍按浅色系读取，旧配置无需迁移。
+- `tools/pack.ps1` 打包跳过 `docs/`；脚本恢复 UTF-8 BOM（无 BOM 时 PowerShell 5.1 会把中文注释读成乱码并报 `string is missing the terminator`）。
+- 仓库目录整理：历史更新说明归入 `docs/updates/`，旧 README 归入 `docs/archive/`，删除 `.bak-*` 页面备份与 `_audit_bak/`。
+
+### Notes
+
+- 本版 zip 与 1.10.2 的差异仅在 README / CHANGELOG / 配置项声明与打包脚本，功能行为不变。
 
 ---
 
