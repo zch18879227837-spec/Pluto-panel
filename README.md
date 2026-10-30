@@ -17,19 +17,35 @@
 
 ---
 
-## 界面预览
+## 界面结构
 
-| 上下文监控（暗夜吸黑） | 上下文监控（白色浅色） |
-| --- | --- |
-| ![context dark](assets/screenshots/context-dark.jpg) | ![context light](assets/screenshots/context-light.jpg) |
+界面固定三栏：左侧导航、中间主区、右侧对话 dock。下图是纯文本画的，不依赖图片，任何 markdown 渲染器（GitHub、插件市场、AstrBot 后台文档栏）都能正常显示：
 
-| 事件日志（暗夜吸黑） | 事件日志（白色浅色） |
-| --- | --- |
-| ![event log dark](assets/screenshots/event-log-dark.jpg) | ![event log light](assets/screenshots/event-log-light.jpg) |
+```
+PLUTO panel 布局
+├─ 左侧导航（236px，固定）
+│    欢迎 / 上下文监控 / 联网搜索 / 抖音浏览 / 抖音风控调速 / 推理通知
+│    行为 / 显示 / 主动消息 / 压缩承接 / 日记本 / 事件日志 / 阈值与播报
+├─ 主区（宽度自适应）
+│    ├─ 顶部：页面标题 +「刷新数据」按钮
+│    ├─ 概览卡片：会话数 · 最高占用 · 预警会话
+│    └─ 会话列表：置顶分组 → 网页面板 → 私聊
+│         每条含 token 进度条、模型名、剩余量、统计/压缩/承接/清空操作
+└─ 右侧对话 dock
+     最近 5 个会话，置顶项带强调色左标，与左侧列表顺序一致
+```
 
-| 会话置顶 | 联网搜索 |
-| --- | --- |
-| ![pin](assets/screenshots/pin-dark.jpg) | ![search](assets/screenshots/search-dark.jpg) |
+两套主题的色值（设计令牌，改一处即可换肤）：
+
+| 令牌 | 暗夜吸黑 | 白色浅色 |
+| --- | --- | --- |
+| 页面底色 | `#151517` | `#FFFFFF` |
+| 强调色 | `#4176E6` | `#2F5FD8` |
+| 圆角 | 16px | 16px |
+| 发丝线 | 0.5px | 0.5px |
+| 动效 | 80 / 120 / 180 / 240ms，`cubic-bezier(.2,0,.13,1)` | 同左 |
+
+每个页面的能力见下方[功能清单](#功能清单)。实机截图（7 张，暗/亮两套）保存在仓库的 `assets/screenshots/` 目录，GitHub 上点开即可查看；AstrBot 后台的插件文档栏不加载图片，看结构图就够了。
 
 ---
 
