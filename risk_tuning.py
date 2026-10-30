@@ -84,6 +84,8 @@ class RiskTuner:
         if self.last_verified is not None and now - self.last_verified > horizon:
             self.last_verified = None
 
+    # Weighted verification score over the last 72 hours (half-life 24h), multiplied by the
+    # operator-facing strictness factor.
     def score(self, strictness: float = 1.0, now: float | None = None) -> float:
         """近 3 天加权风控分数（已乘严格系数）。"""
         now = float(now if now is not None else time.time())
@@ -171,6 +173,7 @@ class RiskTuner:
             "dwell_max": round(max(MIN_DWELL, dwell_max), 1),
         }
 
+    # Map the score to a three-tier parameter set; the 8s dwell floor is never crossed.
     def effective_params(
         self, dy: dict[str, Any], strictness: float = 1.0, now: float | None = None
     ) -> dict[str, Any]:

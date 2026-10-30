@@ -55,6 +55,7 @@ def clean_for_tts(text: str) -> str:
     return text.strip()
 
 
+# Split long replies into TTS-sized chunks on sentence boundaries (no mid-word cuts).
 def split_for_tts(text: str, max_chars: int, max_segments: int) -> list[str]:
     """按句读切分并合并成若干段，每段不超过 max_chars。"""
     text = (text or "").strip()
@@ -259,6 +260,12 @@ class TtsService:
             if path:
                 paths.append(path)
         self._bump_stats(len(paths), len(clean))
+        if paths:
+            try:
+                from .eventlog import log_event
+                log_event("信息", "系统", "语音", f"合成语音 {len(paths)} 段 / {len(clean)} 字")
+            except Exception:
+                pass
         return paths
 
     # ------------------------------------------------------------ 统计

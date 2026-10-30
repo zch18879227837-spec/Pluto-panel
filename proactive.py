@@ -351,6 +351,8 @@ class ProactiveEngine:
             pass
         return None
 
+    # Claim the slot atomically (conditional UPDATE + commit) before sending, so two
+    # schedulers can never deliver the same proactive message twice.
     def _claim_slot(self, umo: str, now: datetime, wait_minutes: float) -> bool:
         """发送许可的原子抢占：多个循环（含热重载遗留的旧实例）同时判定
         「该发了」时，只有一个能写进去，其余直接放弃。"""
@@ -573,6 +575,8 @@ class ProactiveEngine:
         left = int((until - datetime.now()).total_seconds())
         return (True, left) if left > 0 else (False, 0)
 
+    # Gate one session through silence window / daily cap / cooldown, then generate the
+    # message from the current persona and deliver it.
     async def _maybe_send(self, umo: str, cfg: dict[str, Any], now: datetime) -> None:
         eff = self._effective(umo)
         cooling, _left = self._cooling(eff)
@@ -625,6 +629,11 @@ class ProactiveEngine:
                 if await self._send(umo, text):
                     self.add_log(umo, text, SOURCE_LABELS[src], "sent")
                     logger.info(f"[token_panel] 主动消息已发送 {umo} 素材={src} 长度={len(text)}")
+                    try:
+                        from .eventlog import log_event
+                        log_event("信息", "系统", "主动消息", f"主动消息已发送（{src}，{len(text)} 字）", umo=umo)
+                    except Exception:
+                        pass
         finally:
             self._inflight.discard(umo)
 

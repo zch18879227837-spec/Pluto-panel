@@ -174,6 +174,7 @@ class NotifyService:
         except Exception:
             return []
 
+    # Start of one reasoning round (on_llm_request): remember time, session and message id.
     def begin(self, event: Any) -> None:
         """on_llm_request：开始一轮。"""
         cfg = self.cfg()
@@ -217,6 +218,8 @@ class NotifyService:
         except Exception as exc:
             self._dbg(f"记录推理响应失败: {exc}")
 
+    # End of the round (on_agent_done): summarize usage, deliver exactly one notification,
+    # then cancel the watchdog.
     async def finish(self, event: Any, run_context: Any, response: Any) -> None:
         """on_agent_done：整轮彻底结束，发一条汇总通知。"""
         key = self._key(event)
@@ -360,6 +363,15 @@ class NotifyService:
             "time": _now_text(), "ok": bool(ok), "scene": state.get("scene"),
             "umo": umo, "targets": targets, "text": text,
         })
+        try:
+            from .eventlog import log_event
+            log_event(
+                "信息" if ok else "警告", "系统", "通知",
+                f"推理完成通知（{'成功' if ok else '失败'}）→ {len(targets)} 个目标",
+                umo=umo, ok=bool(ok),
+            )
+        except Exception:
+            pass
 
     async def _speak(self, cfg: dict[str, Any], targets: list[str], text: str) -> None:
         """语音播报：复用 AstrBot 原生 TTS Provider，失败时静默回退为纯文本。"""

@@ -261,6 +261,7 @@ async def run_session(args) -> dict:
     }
 
 
+# CLI entry: run one guest browsing session, then emit the JSON report to --out or stdout.
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-videos", type=int, default=10)

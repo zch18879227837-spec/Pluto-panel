@@ -1,17 +1,22 @@
 {
   "style": {
     "type": "string",
-    "description": "默认配色风格",
-    "hint": "claude = Claude Code 风格（陶匠橙）；deepseek = DeepSeek 蓝调（#0066FF）。面板里选中后会写入本地 settings.json 优先于此项",
-    "default": "claude",
-    "options": ["claude", "deepseek"]
+    "description": "配色风格（固定）",
+    "hint": "deepseek = DeepSeek 蓝调（#0066FF）。旧版 claude 值仍可读取以兼容老安装，面板已不再提供该风格。",
+    "default": "deepseek",
+    "options": [
+      "deepseek"
+    ]
   },
   "theme": {
     "type": "string",
     "description": "默认主题",
     "hint": "ivory = 象牙白画布，ink = 纯黑画布。面板里选中后会写入本地 settings.json 优先于此项",
     "default": "ivory",
-    "options": ["ivory", "ink"]
+    "options": [
+      "ivory",
+      "ink"
+    ]
   },
   "zoom": {
     "type": "int",
