@@ -32,11 +32,19 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.db.po import ProviderStat
 from astrbot.core.message.message_event_result import MessageChain
 
-from .proactive import PROACTIVE_DEFAULTS, ProactiveEngine
+from .proactive import PROACTIVE_DEFAULTS, ProactiveEngine, start_loops, stop_all_loops
+from .notify import NOTIFY_DEFAULTS, NotifyService
 from .risk_tuning import RiskTuner
+from .tts_module import (
+    TTS_DEFAULTS,
+    TtsService,
+    clean_for_tts,
+    has_trigger,
+    strip_trigger,
+)
 
 PLUGIN_NAME = "astrbot_plugin_token_panel"
-PLUGIN_VERSION = "1.5.5"
+PLUGIN_VERSION = "1.7.2"
 PAGE_PREFIX = f"/{PLUGIN_NAME}/page"
 
 # 高危线固定 95%（需求写死），预警线可在面板/指令里调整
@@ -91,6 +99,44 @@ ENHANCED_SUMMARY_EXTRA = (
     "\n4. 另外单独提取对话里出现的关键数据（数字、版本号、价格、日期）、配置项（参数名与取值）、"
     "代码要点（函数名、路径、命令）——只摘录原文出现过的事实，不确定就写「未提及」，严禁编造；\n"
     "5. 仍用要点式短句，总字数不超过 {max_chars} 字，不要输出表格或代码块。"
+)
+
+# --------------------------------------------------------------------------- #
+# 会话日记本（v1.6.0）
+# 与压缩 / 承接完全解耦的独立记忆层：自己存盘、自己检索、自己的开关。
+# 全程不经过任何摘要与承接函数，也不参与上下文合并。
+# --------------------------------------------------------------------------- #
+DIARY_DEFAULTS: dict[str, Any] = {
+    "enable": False,              # 总开关（关闭时读写与检索注入全部休眠）
+    "max_per_day": 3,             # 单会话单日最多几篇（模型按权重自己决定 1~3 篇）
+    "max_single_length": 260,     # 单篇正文长度上限
+    "inject_relevant_count": 3,   # 每次请求最多注入几条相关日记
+}
+# 参数合法区间（面板前端实时校验，后端仍夹取一次兜底）
+DIARY_LIMITS: dict[str, list[int]] = {
+    "max_per_day": [1, 3],
+    "max_single_length": [60, 1000],
+    "inject_relevant_count": [1, 10],
+}
+# 相似度低于这个值就不注入，宁可少给也不灌无关内容
+DIARY_RELEVANCE_FLOOR = 0.10
+# 日记权重：high > medium > low（与摘要模板保留项一一对应）
+DIARY_WEIGHTS = ("high", "medium", "low")
+DIARY_WEIGHT_RANK = {"high": 3, "medium": 2, "low": 1}
+DIARY_WEIGHT_CN = {"high": "高", "medium": "中", "low": "低"}
+# 日记标签：<diary weight="high">正文</diary>
+DIARY_TAG_RE = re.compile(r"<diary\b([^>]*)>(.*?)</diary\s*>", re.S | re.I)
+# 流式输出时漏写的未闭合残留，发送前一并清掉
+DIARY_TAIL_RE = re.compile(r"<diary\b[^>]*>.*$", re.S | re.I)
+DIARY_WEIGHT_ATTR_RE = re.compile(r"weight\s*=\s*[\"']?([A-Za-z]+)", re.I)
+
+# 注入给模型的写日记规则（只在开关打开时出现在系统提示里）
+DIARY_WRITE_RULE = (
+    "【日记本】值得长期记住的事，在回复末尾附：<diary weight=\"high\">一句话</diary>，weight 取 high / medium / low。\n"
+    "高=长期偏好与习惯、重要约定与承诺、关系与关键事实；中=阶段性进展与结论、明确的计划；低=只对当下有用的小事；"
+    "寒暄、重复、无信息量的闲聊不写。一天最多 {max_per_day} 篇，没有就不写；"
+    "第三人称、一句话讲清「发生了什么、意味着什么」，不超过 {max_len} 字，不重复原话，不要 Markdown 与编号；"
+    "标签原样输出，不解释日记本，也不在标签之外复述正文。"
 )
 
 REMINDER_RE = re.compile(r"<system_remind[^>]*>.*?</system_remind[^>]*>", re.S)
@@ -217,10 +263,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "debug_log": False,      # 调试日志
     "carry": dict(CARRY_DEFAULTS),  # 压缩承接设置（迁移自 ctx_carry 配置）
     "proactive": dict(PROACTIVE_DEFAULTS),  # 精细化主动消息（v1.4.1 内置）
+    "diary": dict(DIARY_DEFAULTS),  # 会话日记本（v1.6.0，独立于压缩/承接）
+    "notify": dict(NOTIFY_DEFAULTS),  # 详细推理完成通知（v1.7.0，独立模块）
+    "tts": dict(TTS_DEFAULTS),  # 语音合成（v1.7.1，独立模块）
     "net_page_size": 50,     # 搜索监控日志展示条数
     "net_highlight": True,   # 搜索监控关键词高亮
     "limit_override": 0,     # 上下文上限手动兜底：0=自动读取（v1.4.1 修复）
     "risk_strictness": 1.0,  # 抖音风控严格系数 0.1~2.0（v1.5.0）
+    "net_log_db": "",        # 搜索日志库路径，空=自动找（v1.6.3）
+    "playwright_browsers_path": "",  # Playwright 浏览器目录，空=用环境变量（v1.6.3）
 }
 
 
@@ -428,6 +479,7 @@ class TokenPanel(Star):
 
         # 运行期状态（不落盘）
         self._pending_clear: dict[str, float] = {}
+        self._pending_diary_clear: dict[str, float] = {}
         self._last_notice: dict[str, float] = {}
         self._last_percent: dict[str, float] = {}
         # provider 窗口上限缓存：umo -> (model, limit, source, expire_ts)
@@ -445,6 +497,23 @@ class TokenPanel(Star):
 
         # ---- 精细化主动消息引擎（v1.4.1） ----
         self.proactive = ProactiveEngine(self)
+
+        # ---- 详细推理完成通知（v1.7.0）：独立模块，自己管自己的状态与日志 ----
+        self.notify = NotifyService(
+            self.context,
+            settings_getter=lambda: self._settings,
+            debug_logger=self._dbg,
+            data_dir=self.data_dir,
+        )
+
+        # ---- 语音合成（v1.7.1）：只调用 AstrBot 原生 TTSProvider，配置在 settings.json 的 tts 段 ----
+        self.tts = TtsService(
+            self.context,
+            settings_getter=lambda: self._settings,
+            settings_saver=self._save_settings,
+            debug_logger=self._dbg,
+            data_dir=self.data_dir,
+        )
 
         # ---- 抖音风控调速（v1.5.0）：分数/计时/回升进度只在内存里，重启即清空 ----
         self.risk = RiskTuner()
@@ -516,6 +585,17 @@ class TokenPanel(Star):
         base["auto_enabled"] = bool(base.get("auto_enabled", False))
         base["enhanced_summary"] = bool(base.get("enhanced_summary", False))
         merged["carry"] = base
+
+        # 会话日记本：逐项兜底（v1.6.0）
+        diary = merged.get("diary")
+        diary = dict(diary) if isinstance(diary, dict) else {}
+        dbase = dict(DIARY_DEFAULTS)
+        dbase.update(diary)
+        dbase["enable"] = bool(dbase.get("enable", False))
+        dbase["max_per_day"] = _clamp_int(dbase.get("max_per_day"), 1, 3, 3)
+        dbase["max_single_length"] = _clamp_int(dbase.get("max_single_length"), 60, 1000, 260)
+        dbase["inject_relevant_count"] = _clamp_int(dbase.get("inject_relevant_count"), 1, 10, 3)
+        merged["diary"] = dbase
         return merged
 
     def _save_settings(self) -> bool:
@@ -1261,6 +1341,14 @@ class TokenPanel(Star):
         except Exception as exc:
             self._dbg(f"继承父会话备注失败: {exc}")
 
+        # 日记本跟随会话完整继承（独立于压缩/承接逻辑，只做整本复制）
+        try:
+            inherited_diary = self._diary_inherit(umo, cid, new_cid)
+            if inherited_diary:
+                self._dbg(f"继承日记 {inherited_diary} 篇")
+        except Exception as exc:
+            logger.warning(f"[token_panel] 继承日记失败: {exc}")
+
         before = est_history_tokens(history)
         after = est_history_tokens(new_content)
         backup_line = backup_name or f"（备份失败：{backup_error or '未知原因'}，不影响本次承接）"
@@ -1302,6 +1390,565 @@ class TokenPanel(Star):
             "backup": backup_name,
             "backup_error": backup_error,
         }
+
+    # ------------------------------------------------------------------ #
+    # 会话日记本（v1.6.0）
+    # 独立存储、独立检索、独立开关：全程不经过任何压缩 / 承接函数，
+    # 也不参与上下文摘要合并，只做「写过什么」的长期备忘。
+    # ------------------------------------------------------------------ #
+    def _diary_cfg(self) -> dict[str, Any]:
+        """读取日记本配置（永远返回完整字段，手改坏了也不会炸）。"""
+        raw = self._settings.get("diary")
+        cfg = dict(DIARY_DEFAULTS)
+        if isinstance(raw, dict):
+            cfg.update(raw)
+        cfg["enable"] = bool(cfg.get("enable", False))
+        cfg["max_per_day"] = _clamp_int(cfg.get("max_per_day"), 1, 3, 3)
+        cfg["max_single_length"] = _clamp_int(cfg.get("max_single_length"), 60, 1000, 260)
+        cfg["inject_relevant_count"] = _clamp_int(cfg.get("inject_relevant_count"), 1, 10, 3)
+        return cfg
+
+    def _diary_enabled(self) -> bool:
+        """总开关：关闭时读写、检索注入、标签识别全部休眠。"""
+        return bool(self._diary_cfg().get("enable"))
+
+    @staticmethod
+    def _diary_key(raw: str, fallback: str = "unknown") -> str:
+        """把 umo / cid 洗成能当目录名的安全串（只保留字母数字与 ._@-）。"""
+        text = re.sub(r"[^0-9A-Za-z_.@-]+", "_", str(raw or "")).strip("._- ")
+        return text[:80] or fallback
+
+    def _diary_root(self) -> Path:
+        return self.data_dir / "diary_log"
+
+    def _diary_path(self, umo: str, cid: str = "") -> Path:
+        """diary_log/{platform}_{person}/diary.json —— 按人存，跨会话共享。
+
+        同一个人换了会话（或做了「承接」）仍然翻得到自己的旧日记；
+        网页面板的每个聊天会话是独立伪用户，统一归到同一个面板主人账下。
+        """
+        platform, _mtype, sid = _split_umo(umo)
+        person = str(sid or umo)
+        if str(platform).lower().startswith("webchat"):
+            parts = person.split("!")
+            person = parts[1] if len(parts) > 1 and parts[1] else "astrbot"
+        platform_key = self._diary_key(platform, "webchat")
+        person_key = self._diary_key(person)
+        return self._diary_root() / f"{platform_key}_{person_key}" / "diary.json"
+
+    def _diary_read(self, umo: str, cid: str) -> list[dict[str, Any]]:
+        """读某个会话的全部日记（最新在前）；任何异常都返回空表，不向上抛。"""
+        if not umo:
+            return []
+        try:
+            path = self._diary_path(umo, cid)
+            if not path.exists():
+                return []
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(f"[token_panel] 读取日记失败: {exc}")
+            return []
+        entries = raw.get("entries") if isinstance(raw, dict) else raw
+        if not isinstance(entries, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            weight = str(item.get("weight") or "medium").strip().lower()
+            if weight not in DIARY_WEIGHT_RANK:
+                weight = "medium"
+            stamp = str(item.get("time") or "").strip()
+            day = str(item.get("date") or "").strip() or stamp[:10]
+            out.append(
+                {
+                    "time": stamp,
+                    "date": day,
+                    "content": content,
+                    "weight": weight,
+                    "cid": str(item.get("cid") or ""),
+                    "umo": str(item.get("umo") or ""),
+                }
+            )
+        out.sort(key=lambda e: str(e.get("time") or ""), reverse=True)
+        return out
+
+    def _diary_write(self, umo: str, cid: str, entries: list[dict[str, Any]]) -> bool:
+        """整表落盘（原子替换）；写失败只记 warning，不影响聊天。"""
+        try:
+            path = self._diary_path(umo, cid)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "version": 1,
+                "umo": str(umo or ""),
+                "cid": str(cid or ""),
+                "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "entries": entries,
+            }
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(path)
+            return True
+        except Exception as exc:
+            logger.warning(f"[token_panel] 写入日记失败: {exc}")
+            return False
+
+    def _diary_add(self, umo: str, cid: str, content: str, weight: str = "medium") -> dict[str, Any] | None:
+        """追加一篇日记；超过当日上限、重复内容、未达标一律安静跳过。"""
+        try:
+            if not self._diary_enabled():
+                return None
+            text = re.sub(r"\s+", " ", str(content or "")).strip()
+            if not text:
+                return None
+            cfg = self._diary_cfg()
+            text = text[: int(cfg["max_single_length"])]
+            weight = str(weight or "medium").strip().lower()
+            if weight not in DIARY_WEIGHT_RANK:
+                weight = "medium"
+            now = time.localtime()
+            today = time.strftime("%Y-%m-%d", now)
+            entries = self._diary_read(umo, cid)
+            if any(str(e.get("content") or "") == text for e in entries):
+                return None
+            today_count = sum(1 for e in entries if str(e.get("date") or "") == today)
+            if today_count >= int(cfg["max_per_day"]):
+                return None
+            entry = {
+                "time": time.strftime("%Y-%m-%d %H:%M", now),
+                "date": today,
+                "content": text,
+                "weight": weight,
+                "cid": str(cid or ""),
+                "umo": str(umo or ""),
+            }
+            entries.insert(0, entry)
+            if not self._diary_write(umo, cid, entries):
+                return None
+            return entry
+        except Exception as exc:
+            logger.warning(f"[token_panel] 记录日记失败: {exc}")
+            return None
+
+    def _diary_clear(self, umo: str, cid: str) -> int:
+        """清空某个会话的日记本，返回清掉的条数。"""
+        count = len(self._diary_read(umo, cid))
+        try:
+            path = self._diary_path(umo, cid)
+            if path.exists():
+                path.unlink()
+            parent = path.parent
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except Exception as exc:
+            logger.warning(f"[token_panel] 清空日记失败: {exc}")
+        return count
+
+    def _diary_inherit(self, umo: str, old_cid: str, new_cid: str) -> int:
+        """（已废弃）日记改成按人存后，承接无需复制，保留函数只为兼容旧调用。"""
+        try:
+            old = self._diary_read(umo, old_cid)
+            if not old:
+                return 0
+            merged = self._diary_read(umo, new_cid)
+            seen = {(str(e.get("time") or ""), str(e.get("content") or "")) for e in merged}
+            added = 0
+            for entry in old:
+                key = (str(entry.get("time") or ""), str(entry.get("content") or ""))
+                if key in seen:
+                    continue
+                merged.append(dict(entry))
+                seen.add(key)
+                added += 1
+            if added <= 0:
+                return 0
+            merged.sort(key=lambda e: str(e.get("time") or ""), reverse=True)
+            return added if self._diary_write(umo, new_cid, merged) else 0
+        except Exception as exc:
+            logger.warning(f"[token_panel] 继承日记失败: {exc}")
+            return 0
+
+    # ---- 相似度检索：只召回与当前提问相关的少量日记 ---------------- #
+    _DIARY_STOP_BIGRAMS = frozenset(
+        {
+            "的了", "了吗", "呢吧", "是的", "我在", "你在", "这个", "那个", "什么",
+            "怎么", "我们", "你们", "他们", "就是", "还是", "可以", "没有", "不是",
+            "因为", "所以", "但是", "如果", "已经", "一个", "一下", "现在", "今天",
+        }
+    )
+
+    @classmethod
+    def _diary_tokens(cls, text: str) -> set[str]:
+        """粗粒度分词：英文/数字取词，中文取二字组（去掉高频虚词）。"""
+        low = str(text or "").lower()
+        tokens = set(re.findall(r"[a-z0-9]{2,}", low))
+        for chunk in re.findall(r"[\u4e00-\u9fff]+", low):
+            if len(chunk) == 1:
+                tokens.add(chunk)
+                continue
+            for i in range(len(chunk) - 1):
+                bigram = chunk[i : i + 2]
+                if bigram not in cls._DIARY_STOP_BIGRAMS:
+                    tokens.add(bigram)
+        return tokens
+
+    @staticmethod
+    def _diary_score(query_tokens: set[str], entry_tokens: set[str]) -> float:
+        """0~1 的相似度：以「提问被覆盖多少」为主，日记自身的覆盖为辅。"""
+        if not query_tokens or not entry_tokens:
+            return 0.0
+        hit = query_tokens & entry_tokens
+        if not hit:
+            return 0.0
+        q_cover = len(hit) / len(query_tokens)
+        e_cover = len(hit) / len(entry_tokens)
+        return q_cover * 0.7 + e_cover * 0.3
+
+    def _diary_retrieve(self, umo: str, cid: str, query: str, limit: int) -> list[dict[str, Any]]:
+        """取相关度最高的若干篇：先按权重 high>medium>low，再按相似度。"""
+        entries = self._diary_read(umo, cid)
+        if not entries or limit <= 0:
+            return []
+        query_tokens = self._diary_tokens(query)
+        if not query_tokens:
+            return []
+        scored: list[tuple[int, float, dict[str, Any]]] = []
+        for entry in entries:
+            score = self._diary_score(query_tokens, self._diary_tokens(str(entry.get("content") or "")))
+            if score < DIARY_RELEVANCE_FLOOR:
+                continue
+            scored.append((DIARY_WEIGHT_RANK.get(str(entry.get("weight")), 2), score, entry))
+        scored.sort(key=lambda item: (-item[0], -item[1], str(item[2].get("time") or "")), reverse=False)
+        return [item[2] for item in scored[:limit]]
+
+    def _diary_context_block(self, umo: str, cid: str, query: str) -> tuple[str, int]:
+        """拼出要追加进系统提示的那一段（写日记规则 + 相关日记）。"""
+        cfg = self._diary_cfg()
+        rule = DIARY_WRITE_RULE.format(
+            max_per_day=int(cfg["max_per_day"]),
+            max_len=int(cfg["max_single_length"]),
+        )
+        related = self._diary_retrieve(umo, cid, query, int(cfg["inject_relevant_count"]))
+        if not related:
+            return rule, 0
+        lines = [rule, "", "【相关日记】（只作参考，不要在回复里复述）"]
+        for item in related:
+            stamp = str(item.get("time") or "")[5:16]
+            lines.append(f"- {stamp}｜{DIARY_WEIGHT_CN.get(str(item.get('weight')), '中')}权重：{item.get('content')}")
+        return "\n".join(lines), len(related)
+
+    def _diary_rule_block(self) -> tuple[str, int]:
+        """只要「写日记」的规则文本（常量部分，不影响前缀缓存）。"""
+        cfg = self._diary_cfg()
+        rule = DIARY_WRITE_RULE.format(
+            max_per_day=int(cfg["max_per_day"]),
+            max_len=int(cfg["max_single_length"]),
+        )
+        return rule, 0
+
+    def _inject_extra(self, req: Any, text: str) -> bool:
+        """把一段临时内容挂到本轮的 user 侧（不落库、不改系统提示）。
+
+        ProviderRequest.extra_user_content_parts 会跟在用户消息后面发给模型，
+        标记 mark_as_temp() 后不会写进会话历史，因此不会让系统提示前缀每轮变化。
+        """
+        text = str(text or "").strip()
+        if not text:
+            return False
+        try:
+            from astrbot.core.agent.message import TextPart
+
+            parts = getattr(req, "extra_user_content_parts", None)
+            if parts is None:
+                # 老版本 AstrBot 没有临时内容通道：退回拼到系统提示末尾（功能不丢）
+                base = str(getattr(req, "system_prompt", "") or "")
+                req.system_prompt = (base + "\n\n" + text).strip()
+                return True
+            for part in parts:
+                if str(getattr(part, "text", "") or "") == text:
+                    return False
+            parts.append(TextPart(text=text).mark_as_temp())
+            return True
+        except Exception as exc:
+            self._dbg(f"注入临时内容失败: {exc}")
+            return False
+
+    @staticmethod
+    def _diary_response_text(resp: Any) -> str:
+        """从 LLMResponse 里拼出正文（流式与非流式都走 result_chain）。"""
+        try:
+            chain = getattr(resp, "result_chain", None)
+            parts = getattr(chain, "chain", None) or []
+            pieces: list[str] = []
+            for comp in parts:
+                text = getattr(comp, "text", None)
+                if isinstance(text, str) and text:
+                    pieces.append(text)
+            return "".join(pieces)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _diary_extract(text: str) -> list[tuple[str, str]]:
+        """抠出 <diary weight=...>正文</diary>，返回 [(权重, 正文)]。"""
+        out: list[tuple[str, str]] = []
+        for attrs, body in DIARY_TAG_RE.findall(str(text or "")):
+            content = re.sub(r"\s+", " ", str(body or "")).strip()
+            if not content:
+                continue
+            match = DIARY_WEIGHT_ATTR_RE.search(str(attrs or ""))
+            weight = match.group(1).strip().lower() if match else "medium"
+            if weight not in DIARY_WEIGHT_RANK:
+                weight = "medium"
+            out.append((weight, content))
+        return out
+
+    def _diary_groups(self, umo: str, cid: str) -> list[dict[str, Any]]:
+        """按自然日分组（最新日期在前，同日内最新在前），面板与指令共用。"""
+        groups: list[dict[str, Any]] = []
+        current = None
+        for entry in self._diary_read(umo, cid):
+            day = str(entry.get("date") or "")
+            if current is None or current.get("date") != day:
+                current = {"date": day, "items": []}
+                groups.append(current)
+            current["items"].append(dict(entry))
+        return groups
+
+    def _diary_text(self, umo: str, cid: str) -> str:
+        """给 /ctx_diary 用的纯文本视图。"""
+        cfg = self._diary_cfg()
+        entries = self._diary_read(umo, cid)
+        if not entries:
+            return (
+                "日记本还是空的。\n"
+                + ("日记本当前是关闭的，打开后才会开始记录。" if not cfg["enable"] else "等出现值得记的事，我会自己写进来。")
+            )
+        today = time.strftime("%Y-%m-%d")
+        today_count = sum(1 for e in entries if str(e.get("date") or "") == today)
+        lines = [
+            f"【日记本】共 {len(entries)} 篇 · 今日 {today_count}/{int(cfg['max_per_day'])} 篇",
+            f"（独立记忆：不参与上下文压缩与承接）",
+        ]
+        shown = 0
+        for group in self._diary_groups(umo, cid):
+            lines.append("")
+            lines.append(str(group.get("date") or ""))
+            for item in group.get("items") or []:
+                if shown >= 12:
+                    lines.append("（只显示最近 12 篇，完整内容看面板）")
+                    return "\n".join(lines)
+                stamp = str(item.get("time") or "")[11:16]
+                mark = DIARY_WEIGHT_CN.get(str(item.get("weight")), "中")
+                lines.append(f"  {stamp} · {mark}｜{item.get('content')}")
+                shown += 1
+        return "\n".join(lines)
+
+    # ---- 钩子：注入 / 记录 / 剥离 ---------------------------------- #
+    @filter.on_llm_request()
+    async def diary_inject(self, event: AstrMessageEvent, req: Any):
+        """发往模型前：把与本轮提问最相关的少量日记追加进系统提示。"""
+        try:
+            if not self._diary_enabled():
+                return
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            if not umo:
+                return
+            cm = self.context.conversation_manager
+            cid = str(await cm.get_curr_conversation_id(umo) or umo)
+            query = str(getattr(event, "message_str", "") or "")
+            block, count = self._diary_context_block(umo, cid, query)
+            if not block:
+                return
+            base = str(getattr(req, "system_prompt", "") or "")
+            if "【日记本】" in base:  # 同一请求里已有，不重复叠加
+                return
+            rule, _cnt = self._diary_rule_block()
+            # 写日记的规则是常量，放系统提示末尾不会让前缀每轮都变
+            req.system_prompt = (base + "\n\n" + rule).strip()
+            # 「相关日记」每轮可能不同，改挂临时内容块，避免打断前缀缓存
+            related = block[len(rule):].strip()
+            if related and self._inject_extra(req, related):
+                self._dbg(f"日记注入 {count} 条（{cid[:8]}）")
+        except Exception as exc:
+            logger.warning(f"[token_panel] 日记检索注入失败: {exc}")
+
+    @filter.on_llm_response()
+    async def diary_capture(self, event: AstrMessageEvent, resp: Any):
+        """模型回复后：识别 <diary> 标签并按权重限度写入日记本。"""
+        try:
+            if not self._diary_enabled():
+                return
+            text = self._diary_response_text(resp)
+            if "<diary" not in text.lower():
+                return
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            if not umo:
+                return
+            cm = self.context.conversation_manager
+            cid = str(await cm.get_curr_conversation_id(umo) or umo)
+            for weight, content in self._diary_extract(text):
+                entry = self._diary_add(umo, cid, content, weight)
+                if entry:
+                    self._dbg(f"写入日记 1 篇（{weight}）")
+        except Exception as exc:
+            logger.warning(f"[token_panel] 识别日记标签失败: {exc}")
+
+    @filter.on_decorating_result()
+    async def diary_strip(self, event: AstrMessageEvent):
+        """发送前把日记标签从正文里剥掉；用户永远看不到标记。"""
+        try:
+            result = event.get_result()
+            chain = getattr(result, "chain", None) if result else None
+            if not chain:
+                return
+            for comp in chain:
+                text = getattr(comp, "text", None)
+                if not isinstance(text, str) or "<diary" not in text.lower():
+                    continue
+                cleaned = DIARY_TAG_RE.sub("", text)
+                cleaned = DIARY_TAIL_RE.sub("", cleaned)
+                cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+                comp.text = cleaned
+        except Exception as exc:
+            logger.warning(f"[token_panel] 剥离日记标签失败: {exc}")
+
+    # ---- Web API --------------------------------------------------- #
+    @staticmethod
+    def _query_text(name: str) -> str:
+        try:
+            from astrbot.api.web import request
+
+            return str(request.query.get(name) or "").strip()
+        except Exception:
+            return ""
+
+    async def _diary_default_target(self) -> tuple[str, str]:
+        """没带 umo 时，退到最近的会话上（面板首次打开用）。"""
+        try:
+            rows = await self._fetch_rows(50)
+        except Exception as exc:
+            self._dbg(f"日记默认会话失败: {exc}")
+            return "", ""
+        if not rows:
+            return "", ""
+        row = rows[0]
+        umo = str(getattr(row, "user_id", "") or "")
+        cid = str(getattr(row, "conversation_id", "") or "")
+        return umo, cid
+
+    async def api_diary_overview(self) -> dict[str, Any]:
+        """日记本总览：会话标识 + 分组列表 + 配置。"""
+        try:
+            umo = self._query_text("umo")
+            cid = self._query_text("cid")
+            if not umo:
+                umo, cid = await self._diary_default_target()
+            if not umo:
+                return {"status": "error", "message": "还没有可读取的会话"}
+            cfg = self._diary_cfg()
+            entries = self._diary_read(umo, cid)
+            today = time.strftime("%Y-%m-%d")
+            today_count = sum(1 for e in entries if str(e.get("date") or "") == today)
+            groups = self._diary_groups(umo, cid)
+            for group in groups:
+                for item in group["items"]:
+                    item["clock"] = str(item.get("time") or "")[11:16]
+                    item["weight_cn"] = DIARY_WEIGHT_CN.get(str(item.get("weight")), "中")
+            return {
+                "status": "ok",
+                "data": {
+                    "umo": umo,
+                    "cid": cid,
+                    "label": self._log_label(umo, cid),
+                    "sessions": await self._diary_sessions(),
+                    "settings": cfg,
+                    "defaults": dict(DIARY_DEFAULTS),
+                    "limits": {k: list(v) for k, v in DIARY_LIMITS.items()},
+                    "total": len(entries),
+                    "today": today_count,
+                    "groups": groups,
+                },
+            }
+        except Exception as exc:
+            logger.warning(f"[token_panel] 读取日记本失败: {exc}")
+            return {"status": "error", "message": "读取日记本失败，请稍后再试"}
+
+    async def _diary_sessions(self) -> list[dict[str, Any]]:
+        """给面板的会话下拉：最近 30 个会话 + 各自日记条数。"""
+        out: list[dict[str, Any]] = []
+        try:
+            rows = await self._fetch_rows(60)
+        except Exception:
+            return out
+        for row in rows:
+            umo = str(getattr(row, "user_id", "") or "")
+            cid = str(getattr(row, "conversation_id", "") or "")
+            if not umo:
+                continue
+            try:
+                count = len(self._diary_read(umo, cid))
+            except Exception:
+                count = 0
+            out.append(
+                {
+                    "umo": umo,
+                    "cid": cid,
+                    "label": self._log_label(umo, cid),
+                    "count": count,
+                }
+            )
+            if len(out) >= 30:
+                break
+        return out
+
+    async def api_diary_settings(self) -> dict[str, Any]:
+        """读取 / 保存日记本设置（GET 读、POST 部分更新）。"""
+        try:
+            from astrbot.api.web import request as plugin_request
+
+            method = str(getattr(plugin_request, "method", "GET") or "GET").upper()
+            if method == "GET":
+                return {
+                    "status": "ok",
+                    "data": {
+                        "diary": self._diary_cfg(),
+                        "defaults": dict(DIARY_DEFAULTS),
+                        "limits": {k: list(v) for k, v in DIARY_LIMITS.items()},
+                    },
+                }
+
+            payload = await self._json_body()
+            cfg = self._diary_cfg()
+            if "enable" in payload:
+                cfg["enable"] = bool(payload.get("enable"))
+            for key in ("max_per_day", "max_single_length", "inject_relevant_count"):
+                if key in payload:
+                    low, high = DIARY_LIMITS[key]
+                    cfg[key] = _clamp_int(payload.get(key), low, high, int(DIARY_DEFAULTS[key]))
+            self._settings["diary"] = cfg
+            self._save_settings()
+            return {"status": "ok", "data": {"diary": cfg}}
+        except Exception as exc:
+            logger.warning(f"[token_panel] 保存日记设置失败: {exc}")
+            return {"status": "error", "message": "保存失败，请稍后再试"}
+
+    async def api_diary_clear(self) -> dict[str, Any]:
+        """清空指定会话的日记本。"""
+        try:
+            payload = await self._json_body()
+            umo = str(payload.get("umo") or "").strip()
+            cid = str(payload.get("cid") or "").strip()
+            if not umo:
+                return {"status": "error", "message": "缺少会话信息"}
+            removed = self._diary_clear(umo, cid)
+            return {"status": "ok", "data": {"removed": removed, "label": self._log_label(umo, cid)}}
+        except Exception as exc:
+            logger.warning(f"[token_panel] 清空日记本失败: {exc}")
+            return {"status": "error", "message": "清空失败，请稍后再试"}
 
     # ------------------------------------------------------------------ #
     # QQ 指令
@@ -1377,6 +2024,11 @@ class TokenPanel(Star):
                 await cm.update_conversation(
                     umo, conversation_id=cid, history=[], token_usage=0
                 )
+                # 会话清空：日记本同步清空
+                try:
+                    self._diary_clear(umo, cid)
+                except Exception as exc:
+                    logger.warning(f"[token_panel] 清空日记失败: {exc}")
                 self._pending_clear.pop(umo, None)
                 note = f"（旧记录已备份：{backup_name}）" if backup_name else ""
                 yield event.plain_result(f"✅ 已清空当前会话上下文{note}。")
@@ -1535,6 +2187,49 @@ class TokenPanel(Star):
             f"增强摘要：{'开启' if self.enhanced_summary else '关闭'}\n"
             "说明：只在单次请求内把老对话换成摘要，不改数据库；真要瘦身请用 /ctx_compress。"
         )
+
+    @filter.command("ctx_diary")
+    async def cmd_ctx_diary(self, event: AstrMessageEvent):
+        """/ctx_diary 查看当前会话的日记本（所有人可用）。"""
+        try:
+            umo = event.unified_msg_origin
+            cm = self.context.conversation_manager
+            cid = str(await cm.get_curr_conversation_id(umo) or umo)
+            yield event.plain_result(self._diary_text(umo, cid))
+        except Exception as exc:
+            logger.warning(f"[token_panel] 读取日记本失败: {exc}")
+            yield event.plain_result("日记本读取失败，稍后再试。")
+
+    @filter.command("ctx_diary_clear")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_ctx_diary_clear(self, event: AstrMessageEvent):
+        """/ctx_diary_clear 清空当前会话的日记本（二次确认，仅管理员）。"""
+        umo = event.unified_msg_origin
+        now = time.time()
+        deadline = self._pending_diary_clear.get(umo, 0)
+        text = (event.message_str or "").strip()
+
+        if deadline > now and "确认" in text:
+            self._pending_diary_clear.pop(umo, None)
+            try:
+                cm = self.context.conversation_manager
+                cid = str(await cm.get_curr_conversation_id(umo) or umo)
+                removed = self._diary_clear(umo, cid)
+                if removed:
+                    yield event.plain_result(f"已清空当前会话的日记本，共删除 {removed} 篇。")
+                else:
+                    yield event.plain_result("当前会话的日记本本来就是空的。")
+            except Exception as exc:
+                logger.warning(f"[token_panel] 清空日记本失败: {exc}")
+                yield event.plain_result("清空失败，稍后再试。")
+            return
+
+        self._pending_diary_clear[umo] = now + 60
+        yield event.plain_result(
+            "这会删掉当前会话的全部日记，且不可恢复（不影响聊天上下文）。\n"
+            "60 秒内再发一次 /ctx_diary_clear 确认 即可执行。"
+        )
+
     # ------------------------------------------------------------------ #
     @filter.on_llm_request()
     async def auto_compress(self, event: AstrMessageEvent, req):
@@ -1720,6 +2415,9 @@ class TokenPanel(Star):
             register(f"{PAGE_PREFIX}/compress", self.api_compress, ["POST"], "压缩会话上下文")
             register(f"{PAGE_PREFIX}/continue", self.api_continue, ["POST"], "生成承接摘要并换会话")
             register(f"{PAGE_PREFIX}/carry", self.api_carry, ["GET", "POST"], "压缩承接设置")
+            register(f"{PAGE_PREFIX}/diary-overview", self.api_diary_overview, ["GET"], "会话日记本总览")
+            register(f"{PAGE_PREFIX}/diary-settings", self.api_diary_settings, ["GET", "POST"], "会话日记本设置")
+            register(f"{PAGE_PREFIX}/diary-clear", self.api_diary_clear, ["POST"], "清空会话日记本")
             register(f"{PAGE_PREFIX}/compress-log", self.api_compress_log, ["GET"], "压缩日志")
             register(f"{PAGE_PREFIX}/backup-preview", self.api_backup_preview, ["POST"], "备份预览")
             register(f"{PAGE_PREFIX}/dy-overview", self.api_dy_overview, ["GET"], "抖音浏览总览")
@@ -1739,6 +2437,14 @@ class TokenPanel(Star):
             # ---- 抖音风控调速（v1.5.0） ----
             register(f"{PAGE_PREFIX}/risk-status", self.api_risk_status, ["GET"], "抖音风控实时状态")
             register(f"{PAGE_PREFIX}/risk-settings", self.api_risk_settings, ["POST"], "抖音风控严格系数")
+            # ---- 语音合成（v1.7.1） ----
+            register(f"{PAGE_PREFIX}/tts-overview", self.api_tts_overview, ["GET"], "语音合成总览")
+            register(f"{PAGE_PREFIX}/tts-settings", self.api_tts_settings, ["POST"], "语音合成设置")
+            # ---- 详细推理完成通知（v1.7.0） ----
+            register(f"{PAGE_PREFIX}/notify-overview", self.api_notify_overview, ["GET"], "推理通知总览")
+            register(f"{PAGE_PREFIX}/notify-settings", self.api_notify_settings, ["POST"], "推理通知设置")
+            register(f"{PAGE_PREFIX}/notify-log", self.api_notify_log, ["POST"], "推理通知日志")
+            register(f"{PAGE_PREFIX}/notify-clear", self.api_notify_clear, ["POST"], "清空推理通知日志")
             logger.info("[token_panel] 面板接口注册完成")
         except Exception as exc:
             logger.error(f"[token_panel] 面板接口注册失败: {exc}")
@@ -1749,18 +2455,422 @@ class TokenPanel(Star):
         except Exception as exc:
             logger.warning(f"[token_panel] 启动旧插件禁用任务失败: {exc}")
             asyncio.create_task(self._dy_loop())
-        # 主动消息调度：重载时先取消旧任务，避免重复定时器
-        for task in list(getattr(self, "_proactive_tasks", [])):
-            try:
-                task.cancel()
-            except Exception:
-                pass
-        self._proactive_tasks = []
+        # 主动消息调度：登记表在 proactive 模块级，热重载时能取消上一个实例的循环。
+        # （原来用实例属性 _proactive_tasks，新实例拿到空列表，旧循环永远不停，
+        #   重载几次就有几个定时器同时发消息。）
         try:
-            self._proactive_tasks.append(asyncio.create_task(self.proactive.loop()))
-            self._proactive_tasks.append(asyncio.create_task(self.proactive.watchdog_loop()))
+            start_loops(self.proactive)
         except Exception as exc:
             logger.warning(f"[token_panel] 启动主动消息调度失败: {exc}")
+
+    # ================================================================== #
+    # 语音合成（v1.7.1，增量模块）
+    # 与通知/主动消息/日记/抖音/风控完全隔离；只读写 settings.json 的 tts 段。
+    # 全部合成走 AstrBot 原生 TTSProvider（context.get_using_tts_provider_async），
+    # 不自行封装任何 TTS 接口。自然语言触发优先于自动开关，且只对当前轮生效。
+    # ================================================================== #
+    TTS_TRIGGER_WORDS = ("发语音", "语音说", "用语音回答")
+
+    def _tts_save(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """写回 tts 配置并落盘（失败只记日志，不影响指令返回）。"""
+        cfg = self.tts.update(patch)
+        try:
+            self._settings["tts"] = cfg
+            self._save_settings()
+        except Exception as exc:
+            logger.warning(f"[token_panel] 保存语音配置失败: {exc}")
+        return cfg
+
+    @filter.on_llm_request()
+    async def tts_capture_trigger(self, event: AstrMessageEvent, req: Any):
+        """识别自然语言触发词：本轮强制语音，并把触发词从 prompt 里剥掉。"""
+        try:
+            raw = event.message_str or ""
+            if not has_trigger(raw):
+                return
+            event.set_extra("_tts_force_voice", True)
+            cleaned = strip_trigger(raw)
+            # 去掉触发词后的提问：空了就补一句，避免模型收到空问题
+            if len(cleaned) < 2:
+                cleaned = "请直接回答我上面这句话。"
+            try:
+                req.prompt = cleaned
+            except Exception:
+                pass
+            # 历史里的最后一条也可能是这句原文，顺手清理，避免污染上下文
+            try:
+                contexts = getattr(req, "contexts", None)
+                if contexts:
+                    last = contexts[-1]
+                    if isinstance(last, dict):
+                        content = last.get("content")
+                        if isinstance(content, str) and has_trigger(content):
+                            last["content"] = strip_trigger(content) or cleaned
+                        elif isinstance(content, list):
+                            for part in content:
+                                if isinstance(part, dict) and part.get("type") == "text":
+                                    text = str(part.get("text") or "")
+                                    if has_trigger(text):
+                                        part["text"] = strip_trigger(text) or cleaned
+            except Exception as exc:
+                logger.warning(f"[token_panel] 清理触发词失败: {exc}")
+            self._dbg("命中语音触发词，本轮强制附带语音")
+        except Exception as exc:
+            logger.warning(f"[token_panel] 语音触发识别失败: {exc}")
+
+    @filter.on_decorating_result()
+    async def tts_attach_voice(self, event: AstrMessageEvent):
+        """发送前给本轮回复追加语音（指令反馈保持纯文字）。"""
+        try:
+            result = event.get_result()
+            chain = getattr(result, "chain", None) if result else None
+            if not chain:
+                return
+            if self.tts.is_command(event):
+                return
+            # 已经带语音（别的插件或原生 TTS 处理过）就不重复追加
+            try:
+                from astrbot.core.message.components import Record as _Record
+
+                if any(isinstance(comp, _Record) for comp in chain):
+                    return
+            except Exception:
+                _Record = None
+
+            forced = bool(event.get_extra("_tts_force_voice"))
+            if not self.tts.should_voice(event, forced):
+                return
+            cfg = self.tts.cfg()
+            texts = [
+                comp.text
+                for comp in chain
+                if isinstance(getattr(comp, "text", None), str) and comp.text.strip()
+            ]
+            if not texts:
+                return
+            spoken = clean_for_tts("".join(texts))
+            if len(spoken) < 2:
+                return
+            paths = await self.tts.synthesize(event, spoken)
+            if not paths:
+                return
+
+            from astrbot.core.message.components import Record
+
+            if not cfg.get("send_both"):
+                # 只发语音：先摘掉纯文本，再追加语音，避免文字里带指令正文
+                for comp in list(chain):
+                    if isinstance(getattr(comp, "text", None), str):
+                        chain.remove(comp)
+            for path in paths:
+                chain.append(Record(file=path, url=path))
+            self._dbg(f"已附加语音 {len(paths)} 段（{'强制' if forced else '自动'}）")
+        except Exception as exc:
+            logger.warning(f"[token_panel] 追加语音失败: {exc}")
+
+    # ---------------------------------------------------------------- #
+    # 指令：/tts_toggle /tts_private /tts_group /tts_voice /tts_speed
+    # ---------------------------------------------------------------- #
+    @filter.command("tts_toggle")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_tts_toggle(self, event: AstrMessageEvent):
+        """/tts_toggle 开关全局语音（仅管理员）。"""
+        cfg = self.tts.cfg()
+        new_state = not bool(cfg.get("enabled"))
+        self._tts_save({"enabled": new_state})
+        yield event.plain_result("语音合成：" + ("已开启" if new_state else "已关闭"))
+
+    @filter.command("tts_private")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_tts_private(self, event: AstrMessageEvent):
+        """/tts_private 切换私聊自动语音（仅管理员）。"""
+        cfg = self.tts.cfg()
+        new_state = not bool(cfg.get("private_enabled"))
+        self._tts_save({"private_enabled": new_state})
+        yield event.plain_result("私聊自动语音：" + ("开" if new_state else "关"))
+
+    @filter.command("tts_group")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_tts_group(self, event: AstrMessageEvent):
+        """/tts_group 切换群聊自动语音（仅管理员）。"""
+        cfg = self.tts.cfg()
+        new_state = not bool(cfg.get("group_enabled"))
+        self._tts_save({"group_enabled": new_state})
+        yield event.plain_result("群聊自动语音：" + ("开" if new_state else "关"))
+
+    @filter.command("tts_voice")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_tts_voice(self, event: AstrMessageEvent):
+        """/tts_voice <音色ID> 修改音色（仅管理员），留空则恢复框架默认。"""
+        arg = (event.message_str or "").strip()
+        for head in ("/tts_voice", "tts_voice"):
+            if arg.lower().startswith(head):
+                arg = arg[len(head):]
+                break
+        voice = arg.strip()
+        self._tts_save({"voice_id": voice})
+        yield event.plain_result(
+            "音色已设置为：" + (voice if voice else "框架当前默认音色")
+        )
+
+    @filter.command("tts_speed")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_tts_speed(self, event: AstrMessageEvent):
+        """/tts_speed <0.5~2.0> 调整语速（仅管理员）。"""
+        arg = (event.message_str or "").strip()
+        for head in ("/tts_speed", "tts_speed"):
+            if arg.lower().startswith(head):
+                arg = arg[len(head):]
+                break
+        try:
+            speed = float(arg.strip())
+        except (TypeError, ValueError):
+            yield event.plain_result(
+                "用法：/tts_speed 1.2（范围 0.5 ~ 2.0）" + NL
+                + "当前语速：" + str(self.tts.cfg().get("speed"))
+            )
+            return
+        if speed < 0.5 or speed > 2.0:
+            yield event.plain_result("语速范围是 0.5 ~ 2.0，请重新输入。")
+            return
+        self._tts_save({"speed": speed})
+        yield event.plain_result("语速已设置为：" + str(speed))
+
+    # ---------------------------------------------------------------- #
+    # 面板接口
+    # ---------------------------------------------------------------- #
+    async def _tts_payload(self) -> dict:
+        """语音状态载荷：概览与保存接口共用，保证两边的统计/提供商信息一致。"""
+        cfg = self.tts.cfg()
+        provider_name = ""
+        provider_ok = False
+        try:
+            provider = await self.context.get_using_tts_provider_async()
+            if provider is not None:
+                provider_ok = True
+                pcfg = getattr(provider, "provider_config", {}) or {}
+                provider_name = str(
+                    pcfg.get("id") or pcfg.get("model") or provider.__class__.__name__
+                )
+        except Exception as exc:
+            self._dbg(f"读取 TTS 提供商失败: {exc}")
+        return {
+            "settings": cfg,
+            "stats": self.tts.stats(),
+            "provider_available": provider_ok,
+            "provider_name": provider_name,
+            "trigger_words": list(self.TTS_TRIGGER_WORDS),
+        }
+
+    async def api_tts_overview(self):
+        """面板：语音合成当前状态。"""
+        return {"status": "ok", "data": await self._tts_payload()}
+
+    async def api_tts_settings(self):
+        """面板：保存语音设置。"""
+        body = await self._json_body()
+        patch = body.get("settings") if isinstance(body.get("settings"), dict) else body
+        self._tts_save(patch or {})
+        return {"status": "ok", "data": await self._tts_payload()}
+
+    # ================================================================== #
+    # 详细推理完成通知（v1.7.0，增量模块）
+    # 与 Token 统计 / 压缩承接 / 日记 / 主动消息 / 抖音 / 风控 完全隔离：
+    # 配置在 settings.json 的 notify 段，日志在 notify_log.json，互不占用字段。
+    # ================================================================== #
+    @filter.on_llm_request()
+    async def notify_turn_begin(self, event: AstrMessageEvent, req: Any):
+        """一轮请求开始：只记时间戳，不发任何消息。"""
+        try:
+            self.notify.begin(event)
+        except Exception as exc:
+            logger.warning(f"[token_panel] 推理通知开始失败: {exc}")
+
+    @filter.on_llm_response()
+    async def notify_turn_note(self, event: AstrMessageEvent, resp: Any):
+        """拿到模型响应：暂存用量/错误信息，仍然不发消息。"""
+        try:
+            await self.notify.note_response(event, resp)
+        except Exception as exc:
+            logger.warning(f"[token_panel] 推理通知记录失败: {exc}")
+
+    @filter.on_agent_done()
+    async def notify_turn_done(self, event: AstrMessageEvent, run_context: Any, response: Any):
+        """整轮推理彻底结束：这时才发唯一一条汇总通知。"""
+        try:
+            await self.notify.finish(event, run_context, response)
+        except Exception as exc:
+            logger.warning(f"[token_panel] 推理通知发送失败: {exc}")
+
+    def _notify_save(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """写回 notify 配置并落盘（失败只记日志，不影响指令返回）。"""
+        cfg = self.notify.update(patch)
+        try:
+            self._settings["notify"] = cfg
+            self._save_settings()
+        except Exception as exc:
+            logger.warning(f"[token_panel] 保存推理通知配置失败: {exc}")
+        return cfg
+
+    @filter.command("notify_on")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_notify_on(self, event: AstrMessageEvent):
+        """/notify_on 开启推理完成通知（仅管理员）。"""
+        self._notify_save({"enabled": True})
+        yield event.plain_result("推理完成通知：已开启（投递模式 " + str(self.notify.cfg().get("mode")) + "）")
+
+    @filter.command("notify_off")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_notify_off(self, event: AstrMessageEvent):
+        """/notify_off 关闭推理完成通知（仅管理员）。"""
+        self._notify_save({"enabled": False})
+        yield event.plain_result("推理完成通知：已关闭")
+
+    @filter.command("notify_status")
+    async def cmd_notify_status(self, event: AstrMessageEvent):
+        """/notify_status 查看通知配置与本会话状态（所有人）。"""
+        cfg = self.notify.cfg()
+        mode_text = {"session": "仅原会话", "admin": "仅管理员私聊", "both": "双推送"}.get(
+            str(cfg.get("mode")), "仅原会话"
+        )
+        on_text = "开启" if cfg.get("enabled") else "关闭"
+        pending = 0
+        try:
+            pending = len(getattr(self.notify, "_turns", {}) or {})
+        except Exception:
+            pending = 0
+        last = ""
+        try:
+            rows = self.notify.log_rows(1)
+            if rows:
+                last = str(rows[0].get("time") or "")
+        except Exception:
+            last = ""
+        text = (
+            "【推理完成通知】" + on_text + NL
+            + "投递模式：" + mode_text + NL
+            + "群聊投递：" + ("允许" if cfg.get("group_enabled") else "不投递") + NL
+            + "内容开关：Token " + ("开" if cfg.get("show_tokens") else "关")
+            + " / 耗时 " + ("开" if cfg.get("show_elapsed") else "关")
+            + " / 记忆 " + ("开" if cfg.get("show_memory") else "关") + NL
+            + "语音播报：" + ("开" if cfg.get("tts") else "关") + NL
+            + "本轮进行中：" + str(pending) + " 个会话待汇总" + NL
+            + "最近一条：" + (last or "暂无")
+        )
+        yield event.plain_result(text)
+
+    @filter.command("notify_toggle")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_notify_toggle(self, event: AstrMessageEvent):
+        """/notify_toggle 一键开关整套推理通知（仅管理员）。"""
+        cfg = self.notify.cfg()
+        new_state = not bool(cfg.get("enabled"))
+        self._notify_save({"enabled": new_state})
+        yield event.plain_result(f"推理通知已{'开启' if new_state else '关闭'}。")
+
+    @filter.command("notify_mode")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_notify_mode(self, event: AstrMessageEvent):
+        """/notify_mode session|admin|both 切换投递模式（仅管理员）。"""
+        raw = str(getattr(event, "message_str", "") or "").strip()
+        arg = raw.split(maxsplit=1)[1].strip().lower() if len(raw.split(maxsplit=1)) > 1 else ""
+        alias = {"会话": "session", "原会话": "session", "管理员": "admin", "双": "both",
+                 "双推送": "both", "both": "both", "admin": "admin", "session": "session"}
+        mode = alias.get(arg, "")
+        if not mode:
+            cfg = self.notify.cfg()
+            yield event.plain_result(
+                "用法：/notify_mode session|admin|both\n当前：" + str(cfg.get("mode") or "session")
+            )
+            return
+        self._notify_save({"mode": mode})
+        yield event.plain_result(f"推理通知投递模式已改为：{mode}")
+
+    @filter.command("notify_text")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_notify_text(self, event: AstrMessageEvent):
+        """/notify_text <文案> 自定义成功通知前缀（仅管理员）。"""
+        raw = str(getattr(event, "message_str", "") or "").strip()
+        parts = raw.split(maxsplit=1)
+        text = parts[1].strip() if len(parts) > 1 else ""
+        if not text:
+            yield event.plain_result("用法：/notify_text ✅ 推理完成（自定义成功前缀）")
+            return
+        self._notify_save({"success_prefix": text[:60]})
+        yield event.plain_result(f"成功通知前缀已改为：{text[:60]}")
+
+    @filter.command("notify_errtext")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_notify_errtext(self, event: AstrMessageEvent):
+        """/notify_errtext <文案> 自定义失败通知前缀（仅管理员）。"""
+        raw = str(getattr(event, "message_str", "") or "").strip()
+        parts = raw.split(maxsplit=1)
+        text = parts[1].strip() if len(parts) > 1 else ""
+        if not text:
+            yield event.plain_result("用法：/notify_errtext ❌ 推理失败（自定义失败前缀）")
+            return
+        self._notify_save({"fail_prefix": text[:60]})
+        yield event.plain_result(f"失败通知前缀已改为：{text[:60]}")
+
+    async def api_notify_overview(self):
+        try:
+            cfg = self.notify.cfg()
+            tts_ok = False
+            try:
+                tts_ok = bool(self.context.get_all_tts_providers())
+            except Exception:
+                tts_ok = False
+            admins = []
+            try:
+                admins = [str(a) for a in (self.context.get_config().get("admins_id") or [])]
+            except Exception:
+                admins = []
+            return {
+                "status": "ok",
+                "data": {
+                    "settings": cfg,
+                    "rows": self.notify.log_rows(50),
+                    "tts_available": tts_ok,
+                    "admins": admins,
+                },
+            }
+        except Exception as exc:
+            logger.warning(f"[token_panel] 读取推理通知总览失败: {exc}")
+            return {"status": "error", "message": "读取推理通知数据失败"}
+
+    async def api_notify_settings(self):
+        try:
+            body = await self._json_body()
+            patch = body.get("settings") if isinstance(body.get("settings"), dict) else body
+            cfg = self._notify_save(patch or {})
+            return {"status": "ok", "data": {"settings": cfg}}
+        except Exception as exc:
+            logger.warning(f"[token_panel] 保存推理通知设置失败: {exc}")
+            return {"status": "error", "message": "保存设置失败"}
+
+    async def api_notify_log(self):
+        try:
+            body = await self._json_body()
+            limit = int(body.get("limit") or 50)
+            return {"status": "ok", "data": {"rows": self.notify.log_rows(limit)}}
+        except Exception as exc:
+            logger.warning(f"[token_panel] 读取推理通知日志失败: {exc}")
+            return {"status": "error", "message": "读取日志失败"}
+
+    async def api_notify_clear(self):
+        try:
+            self.notify.clear_log()
+            return {"status": "ok", "data": {"rows": []}}
+        except Exception as exc:
+            logger.warning(f"[token_panel] 清空推理通知日志失败: {exc}")
+            return {"status": "error", "message": "清空日志失败"}
+
+    async def terminate(self) -> None:
+        """卸载/重载时停掉调度循环（模块级登记表，能取消到上个实例的任务）。"""
+        try:
+            stop_all_loops()
+        except Exception as exc:
+            logger.warning(f"[token_panel] 停止主动消息调度失败: {exc}")
 
     # ------------------------------------------------------------------ #
     # 防冲突：自动禁用「上下文统计」「上下文压缩与承接」旧插件
@@ -2062,6 +3172,11 @@ class TokenPanel(Star):
             cm = self.context.conversation_manager
             await cm.update_conversation(umo, conversation_id=cid, history=[], token_usage=0)
             self._drop_meta(cid)
+            # 会话清空：日记本同步清空（日记不参与压缩，但跟着会话走）
+            try:
+                self._diary_clear(umo, cid)
+            except Exception as exc:
+                logger.warning(f"[token_panel] 清空日记失败: {exc}")
             logger.info(f"[token_panel] 面板清空会话 {cid[:8]}")
             return {"status": "ok", "data": {"cid": cid}}
         except Exception as exc:
@@ -2122,6 +3237,10 @@ class TokenPanel(Star):
                         continue
                     await db.delete_conversation(cid)
                     self._drop_meta(cid)
+                    try:
+                        self._diary_clear(umo, cid)
+                    except Exception as exc:
+                        logger.warning(f"[token_panel] 清空日记失败: {exc}")
                     removed += 1
                     logger.info(f"[token_panel] 删除空会话 {cid[:8]}")
                 except Exception as exc:
@@ -2153,6 +3272,10 @@ class TokenPanel(Star):
                     await self._backup_before_clear(umo, cid)
                     await db.delete_conversation(cid)
                     self._drop_meta(cid)
+                    try:
+                        self._diary_clear(umo, cid)
+                    except Exception as exc:
+                        logger.warning(f"[token_panel] 清空日记失败: {exc}")
                     removed += 1
                 except Exception as exc:
                     self._dbg(f"清理闲置会话失败: {exc}")
@@ -2378,17 +3501,41 @@ class TokenPanel(Star):
     # ------------------------------------------------------------------ #
     # 联网搜索监控：只读 websearch 插件的 SQLite 日志，不改它任何状态
     # ------------------------------------------------------------------ #
-    NET_LOG_DB = Path(r"D:\dafeiyu\AstrBot\data\plugin_data\astrbot_plugin_websearch\search_log.db")
+    NET_LOG_DB_NAME = "search_log.db"
+    NET_PLUGIN_HINT = "astrbot_plugin_websearch"
+
+    def _net_db_path(self) -> Path:
+        """搜索日志库位置：优先 settings.net_log_db，其次自动在同级插件目录里找。
+
+        不再硬编码作者本机路径；换机器或换盘符，只要 websearch 插件还在就能定位。
+        """
+        try:
+            custom = str(self._settings.get("net_log_db") or "").strip()
+            if custom:
+                return Path(custom)
+        except Exception:
+            pass
+        base = self.data_dir.parent  # .../data/plugin_data
+        preferred = base / self.NET_PLUGIN_HINT / self.NET_LOG_DB_NAME
+        if preferred.exists():
+            return preferred
+        try:
+            for cand in sorted(base.glob("*/" + self.NET_LOG_DB_NAME)):
+                return cand
+        except Exception:
+            pass
+        return preferred
 
     def _net_rows(self, keyword: str = "", limit: int = 50) -> list[dict[str, Any]]:
         """读搜索日志（只读连接，任何异常都返回空列表）。"""
         rows: list[dict[str, Any]] = []
         try:
-            if not self.NET_LOG_DB.exists():
+            db_path = self._net_db_path()
+            if not db_path.exists():
                 return rows
             import sqlite3
 
-            conn = sqlite3.connect(f"file:{self.NET_LOG_DB.as_posix()}?mode=ro", uri=True, timeout=3)
+            conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=3)
             try:
                 cur = conn.cursor()
                 sql = ("SELECT id, ts, provider, query, status, count, took_ms FROM search_log")
@@ -2412,11 +3559,12 @@ class TokenPanel(Star):
     def _net_stats(self) -> dict[str, Any]:
         stats = {"total": 0, "today": 0, "ok": 0, "fail": 0, "avg_ms": 0}
         try:
-            if not self.NET_LOG_DB.exists():
+            db_path = self._net_db_path()
+            if not db_path.exists():
                 return stats
             import sqlite3
 
-            conn = sqlite3.connect(f"file:{self.NET_LOG_DB.as_posix()}?mode=ro", uri=True, timeout=3)
+            conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=3)
             try:
                 cur = conn.cursor()
                 stats["total"] = cur.execute("SELECT COUNT(*) FROM search_log").fetchone()[0]
@@ -2456,7 +3604,7 @@ class TokenPanel(Star):
             return {"status": "ok", "data": {
                 "rows": self._net_rows(keyword=keyword, limit=50),
                 "stats": self._net_stats(),
-                "db_found": self.NET_LOG_DB.exists(),
+                "db_found": self._net_db_path().exists(),
             }}
         except Exception as exc:
             logger.warning(f"[token_panel] 联网监控失败: {exc}")
@@ -2465,11 +3613,12 @@ class TokenPanel(Star):
     async def api_net_clear(self) -> dict[str, Any]:
         """清空搜索日志（只清日志表，不动插件配置）。"""
         try:
-            if not self.NET_LOG_DB.exists():
+            db_path = self._net_db_path()
+            if not db_path.exists():
                 return {"status": "ok", "data": {"removed": 0}}
             import sqlite3
 
-            conn = sqlite3.connect(str(self.NET_LOG_DB), timeout=5)
+            conn = sqlite3.connect(str(db_path), timeout=5)
             try:
                 cur = conn.cursor()
                 cur.execute("DELETE FROM search_log")
@@ -2828,7 +3977,9 @@ class TokenPanel(Star):
         proc = None
         try:
             env = os.environ.copy()
-            env.setdefault("PLAYWRIGHT_BROWSERS_PATH", r"D:\dafeiyu\ms-playwright")
+            browsers_path = str(self._settings.get("playwright_browsers_path") or "").strip()
+            if browsers_path:
+                env.setdefault("PLAYWRIGHT_BROWSERS_PATH", browsers_path)
             env.setdefault("PYTHONUTF8", "1")
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "-X", "utf8", str(worker),
@@ -3099,11 +4250,8 @@ class TokenPanel(Star):
             if not self._dy_is_asking(event.message_str or ""):
                 return
             block = self._dy_llm_block()
-            base = getattr(req, "system_prompt", "") or ""
-            if block in base:
-                return
-            req.system_prompt = (base + "\n\n" + block).strip()
-            self._dbg("已按口头提问注入最近浏览记录")
+            if self._inject_extra(req, block):
+                self._dbg("已按口头提问注入最近浏览记录")
         except Exception as exc:
             self._dbg(f"注入最近浏览记录失败: {exc}")
 

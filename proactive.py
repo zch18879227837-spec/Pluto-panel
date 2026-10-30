@@ -15,6 +15,7 @@ import json
 import random
 import re
 import sqlite3
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -35,7 +36,7 @@ PROACTIVE_DEFAULTS: dict[str, Any] = {
     "penalty_mult": 2.0,              # 被无视/敷衍后的冷却倍率
     "adaptive": True,                 # 反馈自适应
     "soft_mode": True,                # 柔和模式
-    "idle_guard_seconds": 120,        # 对话优先：最近有人说话就不打扰
+    "idle_guard_seconds": 600,        # 对话优先：最近有人说话就不打扰（最短 10 分钟）
     "ignore_after_min": 30,           # 多久没回视为被无视
 }
 
@@ -66,6 +67,41 @@ CREATE TABLE IF NOT EXISTS proactive_log(
 );
 CREATE INDEX IF NOT EXISTS idx_plog_umo_ts ON proactive_log(umo, ts);
 """
+
+# 调度任务登记表必须放在模块级：插件热重载会新建 ProactiveEngine 实例，
+# 实例属性上的 _proactive_tasks 在新实例里永远是空列表，旧实例的循环
+# 于是没人取消，重载几次就会有几个循环同时发消息。
+_LOOP_TASKS: list[asyncio.Task] = []
+
+
+def stop_all_loops() -> None:
+    """取消所有旧实例遗留的调度循环（热重载 / 卸载时调用）。"""
+    while _LOOP_TASKS:
+        task = _LOOP_TASKS.pop()
+        try:
+            task.cancel()
+        except Exception:
+            pass
+
+
+def start_loops(engine: "ProactiveEngine") -> None:
+    """先清掉旧循环，再启动本实例的 loop 与 watchdog。
+
+    除了模块级登记表，还给本次启动打一个 runner_token 写进 settings.json：
+    旧实例的循环每次 tick 都会核对 token，发现已被接管就自行退出。
+    这样即使插件模块被重新导入（登记表变成新对象），旧循环也不会活着。
+    """
+    stop_all_loops()
+    token = uuid.uuid4().hex
+    engine._runner_token = token
+    try:
+        cfg = engine.settings()
+        cfg["runner_token"] = token
+        engine.save_settings()
+    except Exception as exc:
+        logger.warning(f"[token_panel] 写入调度标记失败: {exc}")
+    _LOOP_TASKS.append(asyncio.create_task(engine.loop()))
+    _LOOP_TASKS.append(asyncio.create_task(engine.watchdog_loop()))
 
 
 def _parse_hhmm(value: str) -> tuple[int, int] | None:
@@ -281,21 +317,32 @@ class ProactiveEngine:
             return 0
 
     def count_today(self, umo: str) -> int:
+        """当日已发条数。status 只表示「主人有没有回」，不能用来数发送量：
+        主人一回复 status 就变成 replied，按 status='sent' 统计会让计数清零，
+        于是每回一句都会立刻再发一条。"""
         today = datetime.now().strftime("%Y-%m-%d")
         try:
             with self._conn() as conn:
                 cur = conn.execute(
-                    "SELECT COUNT(*) FROM proactive_log WHERE umo=? AND status='sent' AND ts LIKE ?",
+                    "SELECT COUNT(*) FROM proactive_log WHERE umo=? AND ts LIKE ?",
                     (umo, f"{today}%"))
                 return int(cur.fetchone()[0])
         except Exception:
             return 0
 
     def _last_sent_at(self, umo: str) -> datetime | None:
+        """上次发送时间。优先读会话表的 last_sent（发送瞬间写入，不受回复影响），
+        没有再回落日志最后一行（同样不看 status）。"""
+        try:
+            raw = str((self.session_row(umo) or {}).get("last_sent") or "")
+            if raw:
+                return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
         try:
             with self._conn() as conn:
                 cur = conn.execute(
-                    "SELECT ts FROM proactive_log WHERE umo=? AND status='sent' ORDER BY id DESC LIMIT 1",
+                    "SELECT ts FROM proactive_log WHERE umo=? ORDER BY id DESC LIMIT 1",
                     (umo,))
                 got = cur.fetchone()
             if got:
@@ -303,6 +350,27 @@ class ProactiveEngine:
         except Exception:
             pass
         return None
+
+    def _claim_slot(self, umo: str, now: datetime, wait_minutes: float) -> bool:
+        """发送许可的原子抢占：多个循环（含热重载遗留的旧实例）同时判定
+        「该发了」时，只有一个能写进去，其余直接放弃。"""
+        stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        cutoff = (now - timedelta(minutes=max(0.5, wait_minutes))).strftime("%Y-%m-%d %H:%M:%S")
+        conn = None
+        try:
+            conn = self._conn()
+            conn.execute(
+                "INSERT OR IGNORE INTO proactive_sessions(umo, last_sent, updated_at)"
+                " VALUES(?,?,?)", (umo, "", stamp))
+            cur = conn.execute(
+                "UPDATE proactive_sessions SET last_sent=?, updated_at=?"
+                " WHERE umo=? AND (last_sent IS NULL OR last_sent='' OR last_sent<=?)",
+                (stamp, stamp, umo, cutoff))
+            conn.commit()
+            return cur.rowcount == 1
+        except Exception as exc:
+            logger.warning(f"[token_panel] 抢占发送许可失败 {umo}: {exc}")
+            return False
 
     # ------------------------------------------------------------------ #
     # 目标会话
@@ -319,6 +387,8 @@ class ProactiveEngine:
             umo = str(getattr(row, "user_id", "") or "")
             if not umo or ":" not in umo:
                 continue
+            if umo.lower().startswith("webchat"):
+                continue  # 网页面板会话不参与主动消息，避免插进对话
             kind = "group" if "GroupMessage" in umo else "friend"
             if kind == "group" and not cfg.get("group_enabled"):
                 continue
@@ -337,20 +407,54 @@ class ProactiveEngine:
     # ------------------------------------------------------------------ #
     # 素材
     # ------------------------------------------------------------------ #
-    def _douyin_material(self) -> str:
+    def _recent_contents(self, umo: str, limit: int = 6) -> list[str]:
+        """最近几条已发内容，用于过滤重复素材（素材源是固定的最近记录，
+        不去重的话同一件事会被反复拿出来说）。"""
+        try:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT content FROM proactive_log WHERE umo=?"
+                    " ORDER BY id DESC LIMIT ?", (umo, limit)).fetchall()
+            return [str(r["content"] or "") for r in rows]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _bigrams(text: str) -> set[str]:
+        clean = re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9]+", "", text or "")
+        if len(clean) < 2:
+            return set()
+        return {clean[i:i + 2] for i in range(len(clean) - 1)}
+
+    def _is_repeat(self, item: str, others: list[str], threshold: float = 0.34) -> bool:
+        grams = self._bigrams(item)
+        if not grams:
+            return False
+        for text in others:
+            other = self._bigrams(text)
+            if len(grams & other) / len(grams) >= threshold:
+                return True
+        return False
+
+    def _douyin_material(self, umo: str = "") -> str:
         try:
             entries = self.plugin._dy_log_read()[:5]
         except Exception:
             entries = []
+        recent = self._recent_contents(umo)
         titles: list[str] = []
         for entry in entries:
             for item in (entry.get("items") or [])[:4]:
                 title = re.sub(r"\s*@.+$", "", str(item.get("title") or "")).strip()
-                if title:
-                    titles.append(title[:60])
+                if not title:
+                    continue
+                title = title[:60]
+                if self._is_repeat(title, recent) or self._is_repeat(title, titles):
+                    continue
+                titles.append(title)
         return "；".join(titles[:6])
 
-    def _search_material(self) -> str:
+    def _search_material(self, umo: str = "") -> str:
         path = self.plugin.NET_LOG_DB
         try:
             conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -361,14 +465,20 @@ class ProactiveEngine:
                 conn.close()
         except Exception:
             return ""
-        queries = [str(r[0]).strip() for r in rows if r and str(r[0]).strip()]
-        return "；".join(dict.fromkeys(queries[:8]))
+        recent = self._recent_contents(umo)
+        picked: list[str] = []
+        for row in rows:
+            query = str(row[0]).strip() if row and str(row[0]).strip() else ""
+            if not query or self._is_repeat(query, recent) or self._is_repeat(query, picked):
+                continue
+            picked.append(query)
+        return "；".join(picked[:8])
 
-    def _material(self, source: str) -> str:
+    def _material(self, source: str, umo: str = "") -> str:
         if source == "douyin":
-            return self._douyin_material()
+            return self._douyin_material(umo)
         if source == "search":
-            return self._search_material()
+            return self._search_material(umo)
         return ""
 
     # ------------------------------------------------------------------ #
@@ -387,8 +497,8 @@ class ProactiveEngine:
             return ""
 
     async def _compose(self, umo: str, source: str, soft: bool) -> str:
-        material = self._material(source)
-        label = SOURCE_LABELS.get(source, "自由闲聊")
+        material = self._material(source, umo)
+        label = SOURCE_LABELS.get(source, "自由闲聊") if material else "自由闲聊"
         persona = await self._persona_prompt(umo)
         rules = [
             "你现在要主动给主人发一条消息（不是回复，是主动搭话）。",
@@ -469,9 +579,20 @@ class ProactiveEngine:
         if cooling:
             return
         last_in = self._last_in.get(umo)
-        guard = int(cfg.get("idle_guard_seconds") or 120)
+        guard = max(int(cfg.get("idle_guard_seconds") or 600), 30)  # 面板可调，下限 30 秒
         if last_in and (now - last_in).total_seconds() < guard:
             return
+        # 硬闸：库里记录的“最近一次人类发言”同样生效，重启后也不会失忆
+        try:
+            with self._conn() as conn:
+                got = conn.execute(
+                    "SELECT updated_at FROM proactive_sessions WHERE umo=?", (umo,)).fetchone()
+            if got and got["updated_at"]:
+                spoke = datetime.strptime(str(got["updated_at"]), "%Y-%m-%d %H:%M:%S")
+                if (now - spoke).total_seconds() < guard:
+                    return
+        except Exception:
+            pass
         if self.count_today(umo) >= eff["daily_max"]:
             return
         last_sent = self._last_sent_at(umo)
@@ -480,7 +601,7 @@ class ProactiveEngine:
         if jitter:
             wait += random.uniform(-abs(jitter), abs(jitter))
         wait = max(0.5, wait)
-        if last_sent and (now - last_sent).total_seconds() < wait * 60:
+        if last_sent and (now - last_sent).total_seconds() < max(wait * 60, 60):
             return
         if umo in self._inflight:
             return
@@ -498,6 +619,9 @@ class ProactiveEngine:
                 text = await self._compose(umo, src, bool(cfg.get("soft_mode", True)))
                 if not text:
                     continue
+                if not self._claim_slot(umo, datetime.now(), wait):
+                    logger.info(f"[token_panel] 主动消息被其它调度抢占，跳过 {umo}")
+                    break
                 if await self._send(umo, text):
                     self.add_log(umo, text, SOURCE_LABELS[src], "sent")
                     logger.info(f"[token_panel] 主动消息已发送 {umo} 素材={src} 长度={len(text)}")
@@ -528,6 +652,9 @@ class ProactiveEngine:
     async def loop(self) -> None:
         await asyncio.sleep(20)
         while True:
+            if not self._is_current_runner():
+                logger.info("[token_panel] 主动消息循环已被新实例接管，退出本循环")
+                return
             try:
                 await self.tick()
             except Exception as exc:
@@ -538,11 +665,29 @@ class ProactiveEngine:
         """每 5 分钟：超时未回的主动消息标记为“被无视”，并按倍率加冷却。"""
         await asyncio.sleep(300)
         while True:
+            if not self._is_current_runner():
+                return
             try:
                 await self._sweep_ignored()
             except Exception as exc:
                 logger.warning(f"[token_panel] 主动消息巡检异常: {exc}")
             await asyncio.sleep(300)
+
+    def _is_current_runner(self) -> bool:
+        """本实例是否仍是当前有效的调度者。
+
+        必须读磁盘上的 settings.json：热重载后的新实例写的是它自己的内存副本，
+        旧实例内存里的 token 永远等于自己，用内存比较判断不出来。
+        """
+        token = getattr(self, "_runner_token", "")
+        if not token:
+            return True
+        try:
+            raw = json.loads(self.plugin.settings_path.read_text(encoding="utf-8"))
+            current = str(((raw.get("proactive") or {}).get("runner_token")) or "")
+        except Exception:
+            return True
+        return current in ("", token)
 
     async def _sweep_ignored(self) -> None:
         cfg = self.settings()
@@ -596,7 +741,18 @@ class ProactiveEngine:
     # 主人回复联动
     # ------------------------------------------------------------------ #
     async def on_inbound(self, umo: str, text: str) -> None:
-        self._last_in[umo] = datetime.now()
+        now = datetime.now()
+        self._last_in[umo] = now
+        stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with self._conn() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO proactive_sessions(umo, last_sent, updated_at) VALUES(?,?,?)",
+                    (umo, "", stamp))
+                conn.execute(
+                    "UPDATE proactive_sessions SET updated_at=? WHERE umo=?", (stamp, umo))
+        except Exception as exc:
+            logger.warning(f"[token_panel] 记录活跃时间失败 {umo}: {exc}")
         try:
             with self._conn() as conn:
                 got = conn.execute(

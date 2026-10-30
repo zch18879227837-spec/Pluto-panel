@@ -42,5 +42,36 @@
     "description": "调试日志",
     "hint": "打开后把读取失败、面板请求等细节写进 AstrBot 日志，便于排查",
     "default": false
+  },
+  "diary": {
+    "type": "object",
+    "description": "会话日记本",
+    "hint": "独立于上下文压缩与承接的长期记忆；面板「日记本」页可单独开关与调参",
+    "items": {
+      "enable": {
+        "type": "bool",
+        "description": "启用日记本",
+        "hint": "关闭后不写入日记、也不检索注入，原有面板与聊天逻辑完全不受影响",
+        "default": false
+      },
+      "max_per_day": {
+        "type": "int",
+        "description": "单日最多篇数",
+        "hint": "1 ~ 3，由模型按记忆权重自行决定写不写、写几篇",
+        "default": 3
+      },
+      "max_single_length": {
+        "type": "int",
+        "description": "单篇字数上限",
+        "hint": "60 ~ 1000，超出自动截断",
+        "default": 260
+      },
+      "inject_relevant_count": {
+        "type": "int",
+        "description": "每次注入条数",
+        "hint": "1 ~ 10，只注入与当前提问最相关的高权重日记",
+        "default": 3
+      }
+    }
   }
 }

@@ -34,7 +34,8 @@
     --sw-dark-line: #2b2a25;
   }
 
-  html[data-theme="ink"] {
+  html[data-theme="ink"],
+html[data-theme="dark"] {
     --bg: #0e0e0d;
     --panel: #161614;
     --panel-2: #1b1b18;
@@ -55,7 +56,8 @@
   /* ================= DeepSeek 蓝调 · 浅色画布 =================
      主色 #0066FF，正常进度条即主蓝；预警 / 高危沿用官方色，
      浅底上为了保证文字对比度，把黄 / 红压深一档。 */
-  html[data-style="deepseek"][data-theme="ivory"] {
+  html[data-style="deepseek"][data-theme="ivory"],
+html[data-style="deepseek"][data-theme="light"] {
     --bg: #f5f7fb;
     --panel: #ffffff;
     --panel-2: #eef2f9;
@@ -82,7 +84,8 @@
   /* ================= DeepSeek 蓝调 · 深色画布 =================
      背景 #0F1117、卡片 #1A1D27、分割线 #2C303A，
      正文 #E5E7EB、次要 #8B92A0，预警 #F5A623、高危 #F24C4C。 */
-  html[data-style="deepseek"][data-theme="ink"] {
+  html[data-style="deepseek"][data-theme="ink"],
+html[data-style="deepseek"][data-theme="dark"] {
     --bg: #0f1117;
     --panel: #1a1d27;
     --panel-2: #151821;
@@ -1008,6 +1011,108 @@
     }
   }
 
+  /* ================= v1.6.0：会话日记本 =================
+     独立记忆层：不参与压缩与承接，所以这里只有展示与操作，没有接入压缩的入口。 */
+  .diary-acts { display: flex; align-items: center; gap: 8px; flex: none; }
+
+  .diary-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .diary-pick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .diary-pick > span { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .diary-select { min-width: 190px; max-width: 100%; font-size: 12.5px; }
+
+  .diary-tally { margin-left: auto; font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .diary-off .diary-tally::after { content: " · 日记本已关闭"; color: var(--faint); }
+
+  .diary-timeline { margin-top: 4px; }
+
+  .diary-day { margin-top: 18px; }
+  .diary-day:first-child { margin-top: 10px; }
+
+  .diary-day-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11.5px;
+    color: var(--faint);
+    letter-spacing: 0.03em;
+  }
+  .diary-day-label::after { content: ""; flex: 1; height: 1px; background: var(--line-soft, var(--line)); }
+
+  .diary-note {
+    margin-top: 9px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg);
+    transition: border-color 0.18s ease, transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  .diary-note:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+  }
+
+  .diary-note .when {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
+  .diary-note .wmark {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 100px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+  }
+  .diary-note .wmark.mid {
+    background: color-mix(in srgb, var(--muted) 14%, transparent);
+    color: var(--muted);
+  }
+  .diary-note .wmark.low {
+    background: color-mix(in srgb, var(--faint) 16%, transparent);
+    color: var(--faint);
+  }
+
+  .diary-note .body {
+    margin-top: 6px;
+    font-size: 13px;
+    line-height: 1.68;
+    color: var(--ink);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .diary-foot {
+    margin-top: 14px;
+    padding-left: 12px;
+    border-left: 2px solid var(--line);
+    font-size: 12px;
+    line-height: 1.75;
+    color: var(--faint);
+  }
+
+  @media (max-width: 760px) {
+    .diary-bar { gap: 8px; }
+    .diary-tally { margin-left: 0; width: 100%; }
+    .diary-select { min-width: 0; width: 100%; }
+    .diary-pick { width: 100%; }
+    .diary-pick > span { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .diary-note { transition: none !important; }
+    .diary-note:hover { transform: none !important; }
+  }
+
   /* 窄屏：侧边栏折成顶部一条横向滑动的导航带 */
   @media (max-width: 900px) {
     #app { grid-template-columns: minmax(0, 1fr); }
@@ -1034,6 +1139,10 @@
     .stats { flex-direction: column; }
     .split { grid-template-columns: 1fr; }
   }
+  .nf-text { white-space: pre-wrap; margin-top: 6px; color: var(--ink); font-size: 12px; line-height: 1.6; }
+  .nf-pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink); }
+  .nf-pill.bad { border-color: color-mix(in srgb, var(--high) 45%, transparent); color: var(--high); }
+  .nf-sub { color: var(--faint); }
 </style>
 </head>
 <body>
@@ -1061,6 +1170,10 @@
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5.5c0 4.3-2.9 7.9-7 9.5-4.1-1.6-7-5.2-7-9.5V6z" /><path d="M9 12.3l2.1 2.1L15.3 10" /></svg>
         <span>抖音风控调速</span>
       </button>
+      <button class="tab" role="tab" id="tab-notify" aria-selected="false" data-view="notify">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 16v-5a6 6 0 10-12 0v5l-1.6 2.4h15.2z" /><path d="M10 20.5a2.2 2.2 0 004 0" /></svg>
+        <span>推理通知</span>
+      </button>
 
       <div class="nav-sep" role="presentation"></div>
 
@@ -1079,6 +1192,10 @@
       <button class="tab" role="tab" id="tab-carry" aria-selected="false" data-view="carry">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h16" /><path d="M5.5 8v9.5a2 2 0 002 2h9a2 2 0 002-2V8" /><path d="M9.5 4h5" /><path d="M12 11v4" /><path d="M9.8 13.2L12 15.4l2.2-2.2" /></svg>
         <span>压缩承接</span>
+      </button>
+      <button class="tab" role="tab" id="tab-diary" aria-selected="false" data-view="diary">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.6A1.6 1.6 0 016.6 3H19a1 1 0 011 1v16a1 1 0 01-1 1H6.6A1.6 1.6 0 015 19.4z" /><path d="M8.6 3v18" /><path d="M11.8 8.4h4.6" /><path d="M11.8 12.2h3.2" /></svg>
+        <span>日记本</span>
       </button>
       <button class="tab" role="tab" id="tab-alert" aria-selected="false" data-view="alert">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16v-5a6 6 0 1112 0v5l1.8 2H4.2z" /><path d="M10 20.5a2.2 2.2 0 004 0" /></svg>
@@ -1163,6 +1280,69 @@
           </div>
         </div>
         <p class="micro">只有读不到真实窗口时才需要填；填写的值对所有会话生效，改完立即重算占比与剩余量。</p>
+      </div>
+    </div>
+
+    <div class="card" id="card-tts">
+      <h2>语音合成（TTS）</h2>
+      <p class="hint" id="tts-provider-hint">调用 AstrBot 原生 TTS 提供商，不额外封装接口。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="关掉时只有用户在消息里说触发词才会发语音。">全局语音总开关</span>
+            <span class="desc">开启后按下面私聊/群聊开关自动带语音</span>
+          </div>
+          <div class="control">
+            <div class="switch" id="sw-tts-enabled" role="switch" aria-checked="false" tabindex="0"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="只影响私聊；群聊是否发语音由下一个开关单独控制。">私聊自动语音</span>
+            <span class="desc">私聊对话默认附带语音</span>
+          </div>
+          <div class="control">
+            <div class="switch" id="sw-tts-private" role="switch" aria-checked="true" tabindex="0"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="群聊里默认不发语音，避免刷屏；打开后按同样的规则合成。">群聊自动语音</span>
+            <span class="desc">群聊对话是否附带语音（默认关）</span>
+          </div>
+          <div class="control">
+            <div class="switch" id="sw-tts-group" role="switch" aria-checked="false" tabindex="0"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="关掉后只发语音、不发文字；打开则文字与语音同时发送。">文字 + 语音同时发送</span>
+            <span class="desc">关闭则只发语音</span>
+          </div>
+          <div class="control">
+            <div class="switch" id="sw-tts-both" role="switch" aria-checked="true" tabindex="0"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="留空则使用 AstrBot 里该 TTS 提供商配置的音色；填写后仅在合成时临时覆盖。">默认音色 ID</span>
+            <span class="desc">留空 = 用框架当前音色</span>
+          </div>
+          <div class="control">
+            <input type="text" id="tts-voice" placeholder="例如 Cherry" maxlength="80" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="提供商支持调速时才生效；不支持的提供商会忽略这个值。">语速</span>
+            <span class="desc" id="tts-speed-label">1.0 倍</span>
+          </div>
+          <div class="control">
+            <input type="range" id="tts-speed" min="0.5" max="2" step="0.1" value="1" />
+          </div>
+        </div>
+        <p class="micro">自然语言触发：消息里带「发语音 / 语音说 / 用语音回答」时，本轮强制附带语音（只生效这一轮，不改上面的开关）；触发词不会带进模型上下文；指令反馈不合成语音；长文本自动分段。</p>
+        <p class="micro" id="tts-stats-line">语音统计读取中…</p>
       </div>
     </div>
 
@@ -1391,6 +1571,87 @@
         <li class="log-empty">正在读取…</li>
       </ul>
     </div>
+  </section>
+
+  <!-- ============ 会话日记本（v1.6.0，独立记忆层） ============ -->
+  <section class="panel-view" id="view-diary" role="tabpanel">
+    <div class="card">
+      <div class="card-head">
+        <h2>会话日记本</h2>
+        <div class="diary-acts">
+          <button class="ghost" id="diary-refresh">刷新</button>
+          <button class="ghost danger-line" id="diary-clear">清空</button>
+        </div>
+      </div>
+      <p class="hint">独立于上下文的长期备忘，按自然日归档；只在需要时整条检索，不参与摘要合并。</p>
+
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="关闭后不再写入日记，也不再检索注入">日记本总开关</span>
+            <span class="desc">关闭后写入、读取与检索注入全部休眠</span>
+          </div>
+          <div class="control">
+            <div class="switch" id="sw-diary" role="switch" aria-checked="false" tabindex="0" aria-label="日记本总开关"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="一天最多记几篇；没有值得长期记住的事就一篇也不写">单日最多篇数</span>
+            <span class="desc">由模型按记忆权重自行决定写不写、写几篇</span>
+          </div>
+          <div class="control">
+            <input type="number" id="diary-max" min="1" max="3" step="1" value="3" />
+            <span class="value">篇</span>
+            <em class="field-err" id="err-diary-max"></em>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="单篇正文的字数上限，超出会被截断">单篇字数上限</span>
+            <span class="desc">一句是一句，不写废话</span>
+          </div>
+          <div class="control">
+            <input type="number" id="diary-len" min="60" max="1000" step="20" value="260" />
+            <span class="value">字</span>
+            <em class="field-err" id="err-diary-len"></em>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="每次对话只推送相关性最高的几条，不会把整本日记塞进上下文">每次注入条数</span>
+            <span class="desc">高权重优先，无关的不注入</span>
+          </div>
+          <div class="control">
+            <input type="number" id="diary-inject" min="1" max="10" step="1" value="3" />
+            <span class="value">条</span>
+            <em class="field-err" id="err-diary-inject"></em>
+          </div>
+        </div>
+      </div>
+
+      <div class="diary-bar">
+        <label class="diary-pick">
+          <span>查看会话</span>
+          <select class="diary-select" id="diary-session" aria-label="选择要查看的会话"></select>
+        </label>
+        <div class="diary-tally" id="diary-tally">正在读取…</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>日记正文</h2>
+      <p class="hint">最新的在最上面；每条只记日期时间与正文，权重只影响检索优先顺序。</p>
+      <div class="diary-timeline" id="diary-timeline">
+        <p class="log-empty">正在读取…</p>
+      </div>
+    </div>
+
+    <p class="diary-foot" id="diary-foot">
+      日记本独立运行，不参与上下文压缩与承接，也不会被写进承接摘要；
+      它结合现有记忆权重逻辑，优先记录长期偏好、重要约定、核心任务与关键事实；
+      每次对话只检索推送相关性最高的几条作为参考，不会把全部日记灌进上下文。
+    </p>
   </section>
 
 
@@ -1633,6 +1894,95 @@
     </div>
   </section>
 
+  <!-- ============ 推理通知（v1.7.0） ============ -->
+  <section class="panel-view" id="view-notify" role="tabpanel">
+    <div class="card">
+      <h2>通知开关与投递</h2>
+      <p class="hint">只在一整轮推理彻底结束后发一条汇总；流式输出过程中不会触发，也不会阻断对话。与 Token 统计、压缩承接、日记、主动消息互不影响。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="关掉后成功与失败通知都不再发送；QQ 里也可以用 /notify_toggle 一键开关。">推理通知总开关</span>
+            <span class="desc">默认开启</span>
+          </div>
+          <div class="control"><div class="switch" id="sw-nf-enabled" role="switch" aria-checked="false" tabindex="0" aria-label="推理通知总开关"></div></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="仅原会话：回到提问的地方；仅管理员私聊：只发给管理员；双推送：两边都发。">投递模式</span>
+            <span class="desc">默认仅原会话</span>
+          </div>
+          <div class="control">
+            <select id="nf-mode" class="mini-select">
+              <option value="session">仅原会话推送</option>
+              <option value="admin">仅管理员私聊推送</option>
+              <option value="both">原会话 + 管理员私聊</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="逗号或空格分隔，可填多个 QQ 号；留空则自动使用 AstrBot 管理员列表里的号。">管理员接收 QQ</span>
+            <span class="desc" id="nf-admins-desc">留空 = 跟随 AstrBot 管理员</span>
+          </div>
+          <div class="control"><input type="text" id="nf-admins" class="input" placeholder="例如 10001, 10002" /></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="群聊默认不推送，避免在群里刷屏；需要时再单独打开。">群聊推理通知</span>
+          </div>
+          <div class="control"><div class="switch" id="sw-nf-group" role="switch" aria-checked="false" tabindex="0" aria-label="群聊推理通知"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>通知内容</h2>
+      <p class="hint">前缀可以在面板改，也可以在 QQ 里用 /notify_text、/notify_errtext 改；三个明细开关独立控制。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="最多 60 字。">成功前缀</span></div>
+          <div class="control"><input type="text" id="nf-success" class="input" maxlength="60" /></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="最多 60 字。">失败前缀</span></div>
+          <div class="control"><input type="text" id="nf-fail" class="input" maxlength="60" /></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="显示输入、输出与合计三行 Token。">Token 详细统计</span></div>
+          <div class="control"><div class="switch" id="sw-nf-tokens" role="switch" aria-checked="false" tabindex="0" aria-label="Token 详细统计"></div></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="显示本轮从开始到结束的秒数，精确到秒。">推理耗时</span></div>
+          <div class="control"><div class="switch" id="sw-nf-elapsed" role="switch" aria-checked="false" tabindex="0" aria-label="推理耗时"></div></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="对比本轮前后长期记忆条数：变多=已写入，不变=无新增。">记忆写入状态</span></div>
+          <div class="control"><div class="switch" id="sw-nf-memory" role="switch" aria-checked="false" tabindex="0" aria-label="记忆写入状态"></div></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="需要 AstrBot 已配置 TTS 语音服务；开启后通知会同时念一遍。">语音播报</span>
+            <span class="desc" id="nf-tts-desc">检测中…</span>
+          </div>
+          <div class="control"><div class="switch" id="sw-nf-tts" role="switch" aria-checked="false" tabindex="0" aria-label="语音播报"></div></div>
+        </div>
+      </div>
+      <p class="micro">改完即保存，无需重启；QQ 端每轮只会收到一条通知。</p>
+    </div>
+
+    <div class="card">
+      <div class="log-head">
+        <div>
+          <h2>最近通知</h2>
+          <p class="hint">只保留最近 100 条，内容仅用于面板回看，不写进对话上下文。</p>
+        </div>
+        <button type="button" class="ghost danger-line" id="btn-nf-clear">清空记录</button>
+      </div>
+      <ul class="log-list" id="nf-log"><li class="log-empty">还没有通知记录。</li></ul>
+    </div>
+  </section>
+
   <!-- ============ 预警设置 ============ -->
   <section class="panel-view" id="view-alert" role="tabpanel">
     <div class="card">
@@ -1680,7 +2030,7 @@
 
   <div class="footnote">
     <span>数据来自 AstrBot 官方会话与 Provider 配置 · 不估算、不联网</span>
-    <span id="foot-version">PLUTO panel v1.5.5</span>
+    <span id="foot-version">PLUTO panel v1.7.2</span>
   </div>
   </div><!-- /.main -->
 </div><!-- /#app -->
@@ -1807,10 +2157,35 @@
     if (select) select.value = name;
   }
 
+  /* 用户选定的主题（ivory/ink）。后台宿主会在 iframe 里把 data-theme 改写成
+     dark/light，所以这里既做入参归一化，也把“想要的”记下来供守卫回写。 */
+  var WANT_THEME = "ivory";
+
+  function normTheme(theme) {
+    return (theme === "ink" || theme === "dark") ? "ink" : "ivory";
+  }
+
   function applyTheme(theme) {
-    document.documentElement.setAttribute("data-theme", theme === "ink" ? "ink" : "ivory");
-    $("theme-ivory").setAttribute("aria-checked", theme === "ink" ? "false" : "true");
-    $("theme-ink").setAttribute("aria-checked", theme === "ink" ? "true" : "false");
+    var name = normTheme(theme);
+    WANT_THEME = name;
+    document.documentElement.setAttribute("data-theme", name);
+    var ivory = $("theme-ivory");
+    var ink = $("theme-ink");
+    if (ivory) ivory.setAttribute("aria-checked", name === "ink" ? "false" : "true");
+    if (ink) ink.setAttribute("aria-checked", name === "ink" ? "true" : "false");
+  }
+
+  /* 宿主改写守卫：只认 ink/ivory 为准；dark/light 等外部值一律拉回用户的选择。
+     回写后值已相等，不会死循环。 */
+  function guardTheme() {
+    try {
+      var mo = new MutationObserver(function () {
+        var raw = document.documentElement.getAttribute("data-theme");
+        if (raw === WANT_THEME) return;
+        document.documentElement.setAttribute("data-theme", WANT_THEME);
+      });
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    } catch (e) { /* 老浏览器没有 MutationObserver 时，CSS 的 dark/light 映射兜底 */ }
   }
 
   function syncRange(el) {
@@ -2049,6 +2424,8 @@
     "btn-refresh": "refresh",
     "btn-refresh-2": "refresh",
     "btn-dy-refresh": "refresh",
+    "diary-refresh": "refresh",
+    "diary-clear": "trash",
     "btn-dy-run": "play",
     "btn-net-clear": "trash",
     "btn-net-search": "filter",
@@ -2633,6 +3010,155 @@
   }
 
   /* ---------------- 交互 ---------------- */
+  // ---------------- 推理通知（v1.7.0） ----------------
+  var NF = { tts: false, raft: 0 };
+
+  function nfSwitch(id, on) {
+    var el = $(id);
+    if (el) el.setAttribute("aria-checked", on ? "true" : "false");
+  }
+
+  function nfIsOn(id) {
+    var el = $(id);
+    return !!el && el.getAttribute("aria-checked") === "true";
+  }
+
+  function bindNfSwitch(id, after) {
+    var el = $(id);
+    if (!el) return;
+    function toggle() {
+      if (el.getAttribute("aria-disabled") === "true") { toast("未配置 TTS 语音服务"); return; }
+      var next = el.getAttribute("aria-checked") !== "true";
+      el.setAttribute("aria-checked", next ? "true" : "false");
+      if (after) after(next);
+      saveNotify();
+    }
+    el.addEventListener("click", toggle);
+    el.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+    });
+  }
+
+  async function loadNotify() {
+    try {
+      var res = await apiGet("notify-overview");
+      var data = (res && (res.data || res.settings)) ? (res.data || res) : {};
+      applyNotify(data);
+      renderNotifyLog(data.rows || []);
+    } catch (e) {
+      toast("读取推理通知数据失败");
+    }
+  }
+
+  function applyNotify(data) {
+    var s = data.settings || {};
+    NF.tts = !!data.tts_available;
+    nfSwitch("sw-nf-enabled", !!s.enabled);
+    nfSwitch("sw-nf-group", !!s.group_enabled);
+    nfSwitch("sw-nf-tokens", s.show_tokens !== false);
+    nfSwitch("sw-nf-elapsed", s.show_elapsed !== false);
+    nfSwitch("sw-nf-memory", s.show_memory !== false);
+    nfSwitch("sw-nf-tts", !!s.tts);
+    if ($("nf-mode")) $("nf-mode").value = s.mode || "session";
+    if ($("nf-admins")) $("nf-admins").value = s.admin_qqs || "";
+    if ($("nf-success")) $("nf-success").value = s.success_prefix || "";
+    if ($("nf-fail")) $("nf-fail").value = s.fail_prefix || "";
+    var tts = $("sw-nf-tts");
+    if (tts) {
+      tts.style.opacity = NF.tts ? "" : "0.45";
+      tts.style.cursor = NF.tts ? "" : "not-allowed";
+      tts.setAttribute("aria-disabled", NF.tts ? "false" : "true");
+    }
+    if ($("nf-tts-desc")) {
+      $("nf-tts-desc").textContent = NF.tts ? "已检测到 TTS，可开启" : "未配置 TTS，暂不可用";
+    }
+    if ($("nf-admins-desc")) {
+      var admins = (data.admins || []).join("、");
+      $("nf-admins-desc").textContent = s.admin_qqs
+        ? "自定义接收号"
+        : (admins ? "跟随管理员：" + admins : "留空 = 跟随 AstrBot 管理员");
+    }
+  }
+
+  function collectNotify() {
+    return {
+      enabled: nfIsOn("sw-nf-enabled"),
+      group_enabled: nfIsOn("sw-nf-group"),
+      show_tokens: nfIsOn("sw-nf-tokens"),
+      show_elapsed: nfIsOn("sw-nf-elapsed"),
+      show_memory: nfIsOn("sw-nf-memory"),
+      tts: NF.tts && nfIsOn("sw-nf-tts"),
+      mode: ($("nf-mode") || {}).value || "session",
+      admin_qqs: (($("nf-admins") || {}).value || "").trim(),
+      success_prefix: (($("nf-success") || {}).value || "").trim(),
+      fail_prefix: (($("nf-fail") || {}).value || "").trim()
+    };
+  }
+
+  var nfSaveTimer = null;
+  function saveNotify() {
+    if (nfSaveTimer) clearTimeout(nfSaveTimer);
+    nfSaveTimer = setTimeout(async function () {
+      try {
+        await apiPost("notify-settings", collectNotify());
+        toast("已保存");
+      } catch (e) {
+        toast("保存失败");
+      }
+    }, 260);
+  }
+
+  function renderNotifyLog(rows) {
+    var box = $("nf-log");
+    if (!box) return;
+    if (!rows || !rows.length) {
+      box.innerHTML = '<li class="log-empty">还没有通知记录。</li>';
+      return;
+    }
+    box.innerHTML = rows.map(function (r) {
+      var ok = !!r.ok;
+      var head = '<span class="nf-pill' + (ok ? "" : " bad") + '">' + (ok ? "成功" : "失败") + "</span>" +
+        '<span class="log-t">' + escapeHtml(r.time || "—") + "</span>" +
+        '<span class="nf-sub">' + escapeHtml(r.scene || "") + "</span>";
+      return '<li class="log-item"><div class="log-row1">' + head + "</div>" +
+        '<div class="nf-text">' + escapeHtml(r.text || "") + "</div></li>";
+    }).join("");
+  }
+
+  function bindNotify() {
+    bindNfSwitch("sw-nf-enabled");
+    bindNfSwitch("sw-nf-group");
+    bindNfSwitch("sw-nf-tokens");
+    bindNfSwitch("sw-nf-elapsed");
+    bindNfSwitch("sw-nf-memory");
+    bindNfSwitch("sw-nf-tts");
+    var mode = $("nf-mode");
+    if (mode) mode.addEventListener("change", saveNotify);
+    ["nf-admins", "nf-success", "nf-fail"].forEach(function (id) {
+      var el = $(id);
+      if (el) el.addEventListener("input", saveNotify);
+    });
+    var clear = $("btn-nf-clear");
+    if (clear) clear.addEventListener("click", async function () {
+      var yes = await askConfirm({
+        title: "清空推理通知记录？",
+        sub: "只删除面板里保存的历史通知",
+        text: "已经发到 QQ 的消息不会被撤回，组合统计也不受影响。",
+        caution: "此操作不可撤销。",
+        okText: "清空",
+        danger: true
+      });
+      if (!yes) return;
+      try {
+        await apiPost("notify-clear", {});
+        renderNotifyLog([]);
+        toast("已清空");
+      } catch (e) {
+        toast("清空失败");
+      }
+    });
+  }
+
   function bindTabs() {
     var tabs = document.querySelectorAll(".tab");
     tabs.forEach(function (tab) {
@@ -2650,8 +3176,10 @@
         if (tab.dataset.view === "carry") { loadCarry(); loadLog(); }
         if (tab.dataset.view === "net") loadNet();
         if (tab.dataset.view === "douyin") loadDy();
+        if (tab.dataset.view === "diary") loadDiary(true);
         // 主动消息的数据在下面的独立闭包里，用挂到 window 的入口触发首次加载
         if (tab.dataset.view === "proactive" && window.__ppLoadProactive) window.__ppLoadProactive();
+        if (tab.dataset.view === "notify") loadNotify();
         if (tab.dataset.view === "risk") {
           loadRisk();
           state.riskTimer = setInterval(loadRisk, 5000);
@@ -3222,6 +3750,316 @@
     else if (act === "limit") focusLimitOverride();
   }
 
+  /* ================= v1.6.0：会话日记本 =================
+     动效策略：优先用 GSAP（异步加载，加载不到就自动退回 Web Animations API），
+     两条路径都是「位移 14px + 渐显」，观感一致，离线也不会卡住面板。 */
+  var diaryState = { umo: "", cid: "", label: "", lastCount: -1, loaded: false, settings: {} };
+
+  function loadGsap() {
+    if (window.gsap) return;
+    try {
+      var s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js";
+      s.async = true;
+      s.onerror = function () { /* 拿不到就静默退回 WAAPI */ };
+      document.head.appendChild(s);
+    } catch (e) {}
+  }
+
+  function diaryTween(el, opts) {
+    if (!el) return;
+    var y = opts && opts.y !== undefined ? opts.y : 14;
+    var from = opts && opts.opacity !== undefined ? opts.opacity : 0;
+    var duration = (opts && opts.duration) || 0.42;
+    var delay = (opts && opts.delay) || 0;
+    if (window.gsap) {
+      window.gsap.fromTo(
+        el,
+        { opacity: from, y: y },
+        { opacity: 1, y: 0, duration: duration, delay: delay, ease: "power3.out", overwrite: "auto" }
+      );
+      return;
+    }
+    if (!el.animate) return;
+    try {
+      el.animate(
+        [
+          { opacity: from, transform: "translateY(" + y + "px)" },
+          { opacity: 1, transform: "translateY(0px)" }
+        ],
+        {
+          duration: duration * 1000,
+          delay: delay * 1000,
+          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+          fill: "both"
+        }
+      );
+    } catch (e) {}
+  }
+
+  function diaryFadeOut(nodes) {
+    var jobs = [];
+    (nodes || []).forEach(function (el, i) {
+      if (window.gsap) {
+        jobs.push(
+          new Promise(function (resolve) {
+            window.gsap.to(el, {
+              opacity: 0,
+              y: -6,
+              duration: 0.2,
+              delay: i * 0.02,
+              ease: "power2.in",
+              overwrite: "auto",
+              onComplete: resolve
+            });
+          })
+        );
+        return;
+      }
+      if (!el.animate) {
+        el.style.opacity = "0";
+        return;
+      }
+      var anim = el.animate(
+        [
+          { opacity: 1, transform: "translateY(0px)" },
+          { opacity: 0, transform: "translateY(-6px)" }
+        ],
+        { duration: 200, delay: i * 20, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "both" }
+      );
+      jobs.push(
+        new Promise(function (resolve) {
+          anim.onfinish = resolve;
+          anim.oncancel = resolve;
+        })
+      );
+    });
+    return Promise.all(jobs);
+  }
+
+  function diaryWeightClass(weight) {
+    if (weight === "high") return "";
+    return weight === "medium" ? " mid" : " low";
+  }
+
+  function renderDiarySessions(list, umo, cid, label) {
+    var sel = $("diary-session");
+    if (!sel) return;
+    var html = "";
+    var found = false;
+    (list || []).forEach(function (s) {
+      var pick = s.umo === umo && String(s.cid) === String(cid);
+      if (pick) found = true;
+      var key = s.umo + "|" + s.cid;
+      html +=
+        '<option value="' + escapeAttr(key) + '"' + (pick ? " selected" : "") + ">" +
+        escapeHtml(s.label || String(s.cid || "").slice(0, 8) || "会话") +
+        "（" + (s.count || 0) + " 篇）</option>";
+    });
+    if (!found && umo) {
+      html =
+        '<option value="' + escapeAttr(umo + "|" + cid) + '" selected>' +
+        escapeHtml(label || String(cid || "").slice(0, 8) || "当前会话") + "</option>" + html;
+    }
+    sel.innerHTML = html;
+  }
+
+  function renderDiaryTimeline(groups) {
+    var box = $("diary-timeline");
+    if (!box) return;
+    var total = 0;
+    var html = "";
+    (groups || []).forEach(function (group) {
+      html += '<div class="diary-day"><div class="diary-day-label">' + escapeHtml(group.date || "") + "</div>";
+      (group.items || []).forEach(function (item) {
+        total += 1;
+        html +=
+          '<div class="diary-note">' +
+          '<div class="when"><span>' + escapeHtml(item.clock || item.time || "") + "</span>" +
+          '<span class="wmark' + diaryWeightClass(item.weight) + '">' + escapeHtml(item.weight_cn || "中") + "权重</span></div>" +
+          '<div class="body">' + escapeHtml(item.content || "") + "</div>" +
+          "</div>";
+      });
+      html += "</div>";
+    });
+    if (!total) {
+      html = '<p class="log-empty">这个会话还没有日记。打开总开关后，遇到值得长期记住的事我会自己写进来。</p>';
+    }
+    box.innerHTML = html;
+
+    var notes = box.querySelectorAll(".diary-note");
+    var prev = diaryState.lastCount;
+    diaryState.lastCount = total;
+    if (!notes.length) return;
+    // 首次进入全部渐入；之后只看新增的那几条，避免整页抖动
+    var fresh = prev >= 0 && total > prev ? total - prev : notes.length;
+    var limit = Math.min(notes.length, fresh);
+    for (var i = 0; i < limit; i += 1) {
+      diaryTween(notes[i], { y: 14, opacity: 0, duration: 0.4, delay: Math.min(i, 8) * 0.045 });
+    }
+  }
+
+  async function loadDiary(silent) {
+    var params = {};
+    if (diaryState.umo) {
+      params.umo = diaryState.umo;
+      params.cid = diaryState.cid;
+    }
+    try {
+      var data = await apiGet("diary-overview", params);
+      var settings = (data && data.settings) || {};
+      diaryState.settings = settings;
+      diaryState.umo = (data && data.umo) || "";
+      diaryState.cid = (data && data.cid) || "";
+      diaryState.label = (data && data.label) || "";
+      diaryState.loaded = true;
+      $("sw-diary").setAttribute("aria-checked", settings.enable ? "true" : "false");
+      syncDiaryFields(settings);
+      renderDiarySessions(data && data.sessions, diaryState.umo, diaryState.cid, diaryState.label);
+      renderDiaryTimeline(data && data.groups);
+      $("diary-tally").textContent =
+        "共 " + ((data && data.total) || 0) + " 篇 · 今日 " +
+        ((data && data.today) || 0) + "/" + (settings.max_per_day || 3);
+      var view = $("view-diary");
+      if (view) view.classList.toggle("diary-off", !settings.enable);
+      if (!silent) toast("日记本已刷新");
+    } catch (e) {
+      if (diaryState.lastCount < 0) {
+        $("diary-timeline").innerHTML = '<p class="log-empty">读取失败：' + escapeHtml((e && e.message) || "稍后再试") + "</p>";
+        $("diary-tally").textContent = "—";
+      }
+      if (!silent) toast((e && e.message) || "读取日记本失败");
+    }
+  }
+
+  async function setDiarySwitch(next) {
+    $("sw-diary").setAttribute("aria-checked", next ? "true" : "false");
+    try {
+      await apiPost("diary-settings", { enable: next });
+      diaryState.settings.enable = next;
+      var view = $("view-diary");
+      if (view) view.classList.toggle("diary-off", !next);
+      toast(next ? "日记本已开启，之后会自己记录" : "日记本已关闭，写入与检索都停了");
+    } catch (e) {
+      toast("保存失败，稍后再试");
+      $("sw-diary").setAttribute("aria-checked", next ? "false" : "true");
+    }
+  }
+
+  // 三个数值字段：范围校验 + 非法输入回显上一次有效值
+  var DIARY_FIELDS = [
+    { id: "diary-max", key: "max_per_day", min: 1, max: 3, err: "err-diary-max", fallback: 3 },
+    { id: "diary-len", key: "max_single_length", min: 60, max: 1000, err: "err-diary-len", fallback: 260 },
+    { id: "diary-inject", key: "inject_relevant_count", min: 1, max: 10, err: "err-diary-inject", fallback: 3 }
+  ];
+
+  function syncDiaryFields(settings) {
+    DIARY_FIELDS.forEach(function (f) {
+      var el = $(f.id);
+      if (!el) return;
+      var cur = settings && settings[f.key];
+      el.value = String(Number(cur === undefined || cur === null ? f.fallback : cur));
+      var errEl = $(f.err);
+      if (errEl) errEl.textContent = "";
+    });
+  }
+
+  function bindDiary() {
+    var sw = $("sw-diary");
+    if (sw) {
+      sw.addEventListener("click", function () {
+        setDiarySwitch(sw.getAttribute("aria-checked") !== "true");
+      });
+      sw.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setDiarySwitch(sw.getAttribute("aria-checked") !== "true");
+        }
+      });
+    }
+
+    DIARY_FIELDS.forEach(function (f) {
+      var el = $(f.id);
+      if (!el) return;
+      el.addEventListener("input", function () {
+        var errEl = $(f.err);
+        if (errEl) errEl.textContent = "";
+      });
+      el.addEventListener("change", async function () {
+        var raw = String(el.value === null || el.value === undefined ? "" : el.value).trim();
+        var num = Number(raw);
+        var errEl = $(f.err);
+        var invalid = !raw || !isFinite(num) || Math.floor(num) !== num || num < f.min || num > f.max;
+        if (invalid) {
+          if (errEl) errEl.textContent = "请输入 " + f.min + "–" + f.max + " 的整数";
+          el.value = String(Number(diaryState.settings[f.key] || f.fallback));
+          return;
+        }
+        if (errEl) errEl.textContent = "";
+        try {
+          var body = {};
+          body[f.key] = num;
+          var data = await apiPost("diary-settings", body);
+          diaryState.settings = (data && data.diary) || diaryState.settings;
+          syncDiaryFields(diaryState.settings);
+          toast("已保存");
+        } catch (e) {
+          toast("保存失败，稍后再试");
+          el.value = String(Number(diaryState.settings[f.key] || f.fallback));
+        }
+      });
+    });
+
+    var sel = $("diary-session");
+    if (sel) {
+      sel.addEventListener("change", function () {
+        var key = String(sel.value || "");
+        var cut = key.indexOf("|");
+        if (cut < 0) return;
+        diaryState.umo = key.slice(0, cut);
+        diaryState.cid = key.slice(cut + 1);
+        diaryState.lastCount = -1;
+        loadDiary(true);
+      });
+    }
+
+    var refresh = $("diary-refresh");
+    if (refresh) {
+      refresh.addEventListener("click", function () {
+        spinWhile(refresh, loadDiary(false));
+      });
+    }
+
+    var clear = $("diary-clear");
+    if (clear) {
+      clear.addEventListener("click", async function () {
+        if (!diaryState.umo) {
+          toast("先选一个会话");
+          return;
+        }
+        var ok = await askConfirm({
+          title: "清空这个会话的日记本？",
+          sub: "只删日记，不动聊天上下文",
+          text: "会删除当前会话的全部日记，不可恢复；压缩与承接的记录不受影响。",
+          caution: "清空后重聊也不会自动恢复。",
+          okText: "清空日记",
+          danger: true
+        });
+        if (!ok) return;
+        try {
+          var nodes = document.querySelectorAll("#diary-timeline .diary-note");
+          var data = await spinWhile(clear, apiPost("diary-clear", { umo: diaryState.umo, cid: diaryState.cid }));
+          await diaryFadeOut(Array.prototype.slice.call(nodes));
+          diaryState.lastCount = -1;
+          toast(data && data.removed ? "已清空 " + data.removed + " 篇日记" : "日记本本来就是空的");
+          loadDiary(true);
+        } catch (e) {
+          toast((e && e.message) || "清空失败");
+        }
+      });
+    }
+  }
+
   async function boot() {
     bindTabs();
     bindControls();
@@ -3231,8 +4069,13 @@
     bindDy();
     bindNet();
     bindRisk();
+  bindNotify();
     bindLimitOverride();
+    bindDiary();
     applySettings(state.settings);
+
+    // v1.6.0：GSAP 异步加载（拿不到就退回 WAAPI），不阻塞面板首屏
+    loadGsap();
 
     // v1.5.4：滑杆填充比例随值同步（拖动、程序赋值都要跟得上）
     bindRanges();
@@ -3483,8 +4326,115 @@
       }
     }
 
+    // ---------------- 语音合成（TTS） ----------------
+    var ttsLoaded = false;
+
+    function ttsSwitch(id, value) {
+      var el = $id(id);
+      if (el) el.setAttribute("aria-checked", value ? "true" : "false");
+    }
+
+    function applyTts(data) {
+      var cfg = (data && data.settings) || {};
+      ttsSwitch("sw-tts-enabled", !!cfg.enabled);
+      ttsSwitch("sw-tts-private", cfg.private_enabled !== false);
+      ttsSwitch("sw-tts-group", !!cfg.group_enabled);
+      ttsSwitch("sw-tts-both", cfg.send_both !== false);
+      var voice = $id("tts-voice");
+      if (voice) voice.value = cfg.voice_id || "";
+      var speed = $id("tts-speed");
+      if (speed) {
+        speed.value = String(cfg.speed || 1);
+        speed.style.setProperty("--fill", Math.round(((Number(speed.value) - 0.5) / 1.5) * 100) + "%");
+      }
+      var label = $id("tts-speed-label");
+      if (label) label.textContent = Number(speed && speed.value || 1).toFixed(1) + " 倍";
+      var hint = $id("tts-provider-hint");
+      if (hint) {
+        hint.textContent = data && data.provider_available
+          ? "调用 AstrBot 原生 TTS（" + (data.provider_name || "已配置") + "），不额外封装接口。"
+          : "当前没有可用的 TTS 提供商，语音会被跳过；请先在 AstrBot 里配置 TTS。";
+      }
+      var st = (data && data.stats) || null;
+      var line = $id("tts-stats-line");
+      if (line && st) {
+        line.textContent = "累计合成 " + (st.total || 0) + " 次 / " + (st.segments || 0) + " 段 / "
+          + (st.chars || 0) + " 字" + (st.last_at ? "，最近 " + st.last_at : "");
+      }
+    }
+
+    async function loadTts(force) {
+      if (ttsLoaded && !force) return;
+      try {
+        var d = await apiGet("tts-overview");
+        applyTts(d);
+        ttsLoaded = true;
+      } catch (err) {
+        var line = $id("tts-stats-line");
+        if (line) line.textContent = "读取语音配置失败：" + ((err && err.message) || err);
+      }
+    }
+
+    async function saveTts(patch) {
+      try {
+        var d = await apiPost("tts-settings", { settings: patch });
+        applyTts(d);
+        ttsLoaded = true;
+      } catch (err) {
+        toast("保存失败：" + ((err && err.message) || err));
+      }
+    }
+
+    function bindTts() {
+      var pairs = [
+        ["sw-tts-enabled", "enabled"],
+        ["sw-tts-private", "private_enabled"],
+        ["sw-tts-group", "group_enabled"],
+        ["sw-tts-both", "send_both"]
+      ];
+      pairs.forEach(function (pair) {
+        var el = $id(pair[0]);
+        if (!el || el.dataset.bound === "1") return;
+        el.dataset.bound = "1";
+        el.addEventListener("click", function () {
+          var next = el.getAttribute("aria-checked") !== "true";
+          el.setAttribute("aria-checked", next ? "true" : "false");
+          var patch = {};
+          patch[pair[1]] = next;
+          saveTts(patch);
+        });
+      });
+      var voice = $id("tts-voice");
+      if (voice && voice.dataset.bound !== "1") {
+        voice.dataset.bound = "1";
+        voice.addEventListener("change", function () {
+          saveTts({ voice_id: voice.value.trim() });
+        });
+      }
+      var speed = $id("tts-speed");
+      if (speed && speed.dataset.bound !== "1") {
+        speed.dataset.bound = "1";
+        speed.addEventListener("input", function () {
+          var v = Number(speed.value || 1);
+          speed.style.setProperty("--fill", Math.round(((v - 0.5) / 1.5) * 100) + "%");
+          var label = $id("tts-speed-label");
+          if (label) label.textContent = v.toFixed(1) + " 倍";
+        });
+        speed.addEventListener("change", function () {
+          saveTts({ speed: Number(speed.value || 1) });
+        });
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", function () {
+      bindTts();
+      loadTts();
+      window.__ppLoadTts = function () { loadTts(true); };
+    });
+
     window.addEventListener("DOMContentLoaded", function () {
       bindShell();
+      guardTheme();
       // 供 bindTabs 在切到「主动消息」时触发首次拉取
       window.__ppLoadProactive = function () { loadProactive(); };
       var cur = document.querySelector(".tab.active");

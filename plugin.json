@@ -2,11 +2,11 @@
   "id": "astrbot_plugin_token_panel",
   "name": "astrbot_plugin_token_panel",
   "display_name": "PLUTO panel（普鲁托面板）",
-  "version": "1.5.5",
+  "version": "1.7.2",
   "author": "Charon",
   "license": "MIT",
-  "description": "会话上下文 Token 用量可视化面板：进度条、预警阈值、自动播报、一键清空；内置上下文统计（/ctx）、压缩与承接（/ctx_compress、/ctx_continue、/ctx_sessions、/ctx_switch）、联网搜索与抖音游客浏览监控，带情绪等级与静默策略的精细化主动消息，以及抖音风控调速（近 3 天加权分数、90 分钟回升周期、8 秒停留硬底线）。",
-  "short_description": "PLUTO panel：Token 面板 + 上下文压缩承接 + 主动消息",
+  "description": "会话上下文 Token 用量可视化面板：进度条、预警阈值、自动播报、一键清空；内置上下文统计（/ctx）、压缩与承接（/ctx_compress、/ctx_continue、/ctx_sessions、/ctx_switch）、联网搜索与抖音游客浏览监控，带情绪等级与静默策略的精细化主动消息，抖音风控调速（近 3 天加权分数、90 分钟回升周期、8 秒停留硬底线），以及详细推理完成通知（整轮结束单条汇总、三档投递、可选语音播报）。；内置语音合成（原生 TTS 复用、自然语言强制触发、长文分段、emoji 清洗）",
+  "short_description": "PLUTO panel：Token 面板 + 压缩承接 + 主动消息 + 推理通知",
   "repo": "https://github.com/Charon/astrbot_plugin_token_panel",
   "homepage": "",
   "keywords": [
@@ -49,8 +49,36 @@
     "net_log",
     "/proactive",
     "/proactive-status",
-    "/proactive-reset"
+    "/proactive-reset",
+    "/notify_toggle",
+    "/notify_mode",
+    "/notify_text",
+    "/notify_errtext",
+    "/notify_status",
+    "/notify_on",
+    "/notify_off",
+    "/tts_toggle",
+    "/tts_private",
+    "/tts_group",
+    "/tts_voice",
+    "/tts_speed"
   ],
   "icon": "assets/icon.png",
-  "banner": "assets/banner.png"
+  "banner": "assets/banner.png",
+  "settings": {
+    "notify": {
+      "enabled": true,
+      "mode": "session",
+      "admin_qqs": "",
+      "group_enabled": false,
+      "success_prefix": "✅ 本次AI推理任务已完成",
+      "fail_prefix": "❌ 本次推理异常终止",
+      "show_tokens": true,
+      "show_elapsed": true,
+      "show_memory": true,
+      "tts": false,
+      "timeout_seconds": 240,
+      "max_log": 100
+    }
+  }
 }

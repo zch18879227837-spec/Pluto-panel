@@ -20,7 +20,7 @@ import random
 import re
 import time
 
-BROWSERS_PATH = r"D:\dafeiyu\ms-playwright"
+BROWSERS_PATH = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
 
 UA_POOL = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -153,7 +153,8 @@ async def _human_move(page) -> None:
 
 
 async def run_session(args) -> dict:
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", BROWSERS_PATH)
+    if BROWSERS_PATH:
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", BROWSERS_PATH)
     from playwright.async_api import async_playwright
 
     started = time.time()
