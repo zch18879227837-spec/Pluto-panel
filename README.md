@@ -2,7 +2,7 @@
 
 > AstrBot 的会话上下文可视化面板：看得见 token 用量，也管得住上下文。
 
-[![Version](https://img.shields.io/badge/version-1.10.3-2F5FD8)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.13.0-2F5FD8)](CHANGELOG.md)
 [![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.11.4-4176E6)](https://github.com/AstrBotDevs/AstrBot)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-3DA639)](LICENSE)
@@ -61,7 +61,7 @@ PLUTO panel 布局
 | **抖音风控调速** | 近 3 天加权分数、严格系数、降档/回升进度、命中记录 |
 | **推理通知** | 整轮结束单条汇总、投递模式、Token/耗时/记忆状态、语音播报、通知日志 |
 | **压缩承接** | 压缩当前会话、承接新会话、备份预览、压缩日志筛选 |
-| **日记本** | 按会话写入的长期记忆、检索注入、单日上限 |
+| **日记本** | 私人日记写法（上午/下午/晚上分篇、写完为止）、检索注入、单日上限 |
 | **主动消息** | 情绪等级、静默时段、每日上限、反重复、发送记录 |
 | **事件日志** | 概览、筛选查询、导出 JSON、导出数据库副本、清理过期记录 |
 | **阈值与播报** | 预警百分比、高危线、自动播报开关与频率 |
@@ -73,7 +73,7 @@ PLUTO panel 布局
 - **压缩 / 承接**：把长会话压成一页摘要，或换新会话带着摘要与最近几轮继续；动手前把原始历史备份到 `carry_backups/`（每会话最多 20 份）。
 - **置顶**：置顶列表写在 `settings.json` 的 `pinned` 字段，左右两侧读同一份数据，刷新与重载后仍在。
 - **联网搜索**：内置 `web_search` 工具（DeepSeek / Tavily / 博查，任选其一），每次检索写本地日志；「要不要搜」由人设与工具描述共同决定。
-- **抖音游客浏览**：Playwright 驱动的游客页浏览，只逛精选、不搜索、不登录，命中安全验证立即停止并进入冷却。
+- **抖音 PC 客户端**：直接操作本机抖音客户端——读窗口状态、截图识别画面、在窗口内滑一个视频；只截图与翻页，不点赞、不评论、不关注、不私信，窗口被挡住/最小化就停手。管理员 QQ 指令 `去/下一个/截图` 先说一遍再确认执行。
 - **风控调速**：72 小时半衰期 24 小时的加权分数，触发验证即降档，90 分钟无新增后匀速回升，8 秒停留是硬底线。
 - **推理通知**：只在整轮推理结束后发一条汇总，流式过程不刷屏；可选语音。
 - **事件日志**：SQLite 主库 + JSONL 双写，30 天 / 20000 行保留上限，面板可直接维护与导出。
@@ -102,7 +102,7 @@ git clone https://github.com/<your-name>/astrbot_plugin_token_panel.git
 ```
 
 目录结构必须是 `data/plugins/astrbot_plugin_token_panel/`（外层文件夹名与插件 id 一致），否则面板路由不会注册。
-放好后在后台点「重载」，日志出现 `[token_panel] 1.10.3 初始化完成` 即成功。
+放好后在后台点「重载」，日志出现 `[token_panel] 1.10.4 初始化完成` 即成功。
 
 ### 依赖
 
@@ -111,7 +111,7 @@ git clone https://github.com/<your-name>/astrbot_plugin_token_panel.git
 | AstrBot | **≥ 4.11.4**（面板页与 `register_web_api` 所需） |
 | Python | 3.10+（AstrBot 自带环境即可） |
 | httpx | 联网搜索用，AstrBot 环境已内置 |
-| Playwright（可选） | 仅「抖音游客浏览」需要：`pip install playwright && playwright install chromium` |
+| pywin32 + Pillow（可选） | 仅「抖音 PC 客户端」需要：`pip install pywin32 pillow`；识别画面用 Windows 自带 OCR（winrt / winsdk，Win10+ 免装） |
 | 搜索 API Key（可选） | 用联网搜索时填写，只存在本地 `settings.json` |
 
 不需要 Node、不需要数据库迁移，装完即可用。
@@ -142,7 +142,13 @@ git clone https://github.com/<your-name>/astrbot_plugin_token_panel.git
 
 ---
 
-## 指令速查
+## 指令
+
+> 小屋相关：`/去 床边`、`/自动走动`、`/停下`、`/小屋`、`/说 文本`（点位名支持自定义，如「懒人角落」）
+> 走到可交互点位会自动播动作并说一句场景独白；像素化强度、角色缩放、阴影透明度在面板「外观 · 光源 · 气泡」卡片里调。
+> 外观卡片顶部有「观察窗（海景）」开关：关掉会用帘子遮上窗外，光源方向 / 月光强度 / 背景三项同时变灰禁用。
+> 卡片头部最左边是「小屋功能」总开关：关掉后舞台盖遮罩、侧栏与对话框变灰、轮询与漫游停止，QQ 指令和 `house_control` 工具统一回一句「小屋功能现在是关着的」，不会静默失败。
+速查
 
 所有指令均需在 QQ 里 @机器人 或私聊发送 `/指令`（仅管理员可用的会标注）。
 
@@ -259,7 +265,7 @@ astrbot_plugin_token_panel/
 ├── risk_tuning.py          抖音风控调速（纯算法，无 IO）
 ├── tts_module.py           语音合成（复用原生 TTSProvider）
 ├── views/dashboard/        面板页面（单页应用：12 个视图）
-├── worker/douyin_worker.py 抖音游客浏览 worker（Playwright）
+├── douyin_pc.py            抖音 PC 客户端驱动（截图 + Windows OCR + 窗口内翻页）
 ├── assets/                 图标、横幅、截图
 ├── docs/                   详细文档、历史更新说明
 ├── tools/pack.ps1          打包脚本
@@ -274,6 +280,7 @@ astrbot_plugin_token_panel/
 
 完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。近期重点：
 
+- **v1.10.4** 主动消息不再复述旧的抖音素材（开关 + 时效 + 持久去重）
 - **v1.10.3** 文档与开源配套：界面结构图替代截图内嵌、CHANGELOG 补全 23 个版本
 - **v1.10.2** 统一事件日志（SQLite + JSONL、面板维护页）
 - **v1.10.1 / v1.9.1** 会话置顶：左右同步与视觉统一

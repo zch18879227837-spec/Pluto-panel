@@ -38,6 +38,8 @@ PROACTIVE_DEFAULTS: dict[str, Any] = {
     "soft_mode": True,                # 柔和模式
     "idle_guard_seconds": 600,        # 对话优先：最近有人说话就不打扰（最短 10 分钟）
     "ignore_after_min": 30,           # 多久没回视为被无视
+    "review": True,                   # 发送前自检（先过脑子，不合格就不发）
+    "dialogue_lines": 10,             # 生成时带上最近几条真实对话做上下文
 }
 
 SOURCE_LABELS = {"douyin": "抖音视频摘要", "search": "搜索资讯", "chat": "自由闲聊"}
@@ -66,6 +68,13 @@ CREATE TABLE IF NOT EXISTS proactive_log(
     reply_ts TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_plog_umo_ts ON proactive_log(umo, ts);
+CREATE TABLE IF NOT EXISTS proactive_used(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    umo TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pused_umo_ts ON proactive_used(umo, ts);
 """
 
 # 调度任务登记表必须放在模块级：插件热重载会新建 ProactiveEngine 实例，
@@ -148,6 +157,9 @@ class ProactiveEngine:
         self.db_path = self.data_dir / "proactive.db"
         self._inflight: set[str] = set()
         self._last_in: dict[str, datetime] = {}
+        self._last_topics: list[str] = []   # 本轮取用的素材标题，发送成功后入库去重
+        self._last_material: str = ""       # 本轮素材原文，供发送前自检比对
+        self._last_dialogue: str = ""       # 本轮注入的最近对话，供发送前自检比对
         self._task: asyncio.Task | None = None
         self._watchdog: asyncio.Task | None = None
         self._init_db()
@@ -421,6 +433,31 @@ class ProactiveEngine:
         except Exception:
             return []
 
+    def _used_topics(self, umo: str, hours: float = 72.0) -> list[str]:
+        """最近 N 小时已经讲过的素材标题（跨消息、跨重启都记得）。"""
+        cutoff = (datetime.now() - timedelta(hours=max(1.0, hours))).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT topic FROM proactive_used WHERE umo=? AND ts>=?"
+                    " ORDER BY id DESC LIMIT 120", (umo, cutoff)).fetchall()
+            return [str(r["topic"] or "") for r in rows]
+        except Exception:
+            return []
+
+    def _mark_used(self, umo: str, topics: list[str]) -> None:
+        """发送成功后登记素材，避免同一条素材在几小时内被反复讲。"""
+        picked = [(umo, str(t).strip()[:120], datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                  for t in (topics or []) if str(t).strip()]
+        if not picked:
+            return
+        try:
+            with self._conn() as conn:
+                conn.executemany(
+                    "INSERT INTO proactive_used(umo, topic, ts) VALUES(?,?,?)", picked)
+        except Exception as exc:
+            logger.warning(f"[token_panel] 记录已用素材失败: {exc}")
+
     @staticmethod
     def _bigrams(text: str) -> set[str]:
         clean = re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9]+", "", text or "")
@@ -428,32 +465,74 @@ class ProactiveEngine:
             return set()
         return {clean[i:i + 2] for i in range(len(clean) - 1)}
 
-    def _is_repeat(self, item: str, others: list[str], threshold: float = 0.34) -> bool:
+    @staticmethod
+    def _overlap(a: set[str], b: set[str]) -> float:
+        if not a or not b:
+            return 0.0
+        hit = len(a & b)
+        return max(hit / len(a), hit / len(b))
+
+    def _is_repeat(self, item: str, others: list[str], threshold: float = 0.26) -> bool:
+        """素材去重：双向重叠率取大者。
+
+        单向比值（交集 / 标题二元组）会被长标题里的 tag、话题词稀释：标题能有
+        五六十个二元组，生成出来的文案只有二十来个，同一件事的比值也能压到阈值
+        以下。双向取大之后，短文案命中同样算命中。
+        """
         grams = self._bigrams(item)
         if not grams:
             return False
         for text in others:
-            other = self._bigrams(text)
-            if len(grams & other) / len(grams) >= threshold:
+            if self._overlap(grams, self._bigrams(text)) >= threshold:
                 return True
         return False
 
     def _douyin_material(self, umo: str = "") -> str:
+        """抖音素材。三条硬条件：浏览开关开着、最后一次浏览足够新、没讲过。
+
+        浏览关掉之后 douyin_log.json 里仍留着上次的标题，原来每次调度都会从里面
+        挑一条，等于替用户「补刷」旧视频——2026-10-31 中午连讲两遍同一件事就是
+        这么来的。默认只认 24 小时内的记录，可用 douyin.material_ttl_hours 调。
+        """
+        self._last_topics = []
+        cfg = self.plugin._settings.get("douyin")
+        cfg = cfg if isinstance(cfg, dict) else {}
+        if cfg.get("enabled") is False:
+            return ""
         try:
-            entries = self.plugin._dy_log_read()[:5]
+            ttl = float(cfg.get("material_ttl_hours") or 24)
         except Exception:
-            entries = []
-        recent = self._recent_contents(umo)
+            ttl = 24.0
+        cutoff = datetime.now() - timedelta(hours=max(1.0, ttl))
+        entries: list[dict] = []
+        try:
+            raw_entries = self.plugin._dy_log_read()[:8]
+        except Exception:
+            raw_entries = []
+        for entry in raw_entries:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                taken = datetime.strptime(str(entry.get("ts") or ""), "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+            if taken >= cutoff:
+                entries.append(entry)
+        if not entries:
+            return ""
+        recent = self._recent_contents(umo) + self._used_topics(umo)
         titles: list[str] = []
         for entry in entries:
             for item in (entry.get("items") or [])[:4]:
                 title = re.sub(r"\s*@.+$", "", str(item.get("title") or "")).strip()
+                title = re.sub(r"^\d{1,2}:\d{2}\s*", "", title).strip()   # 去掉“04:38”时长戳
                 if not title:
                     continue
-                title = title[:60]
+                title = title[:80]
                 if self._is_repeat(title, recent) or self._is_repeat(title, titles):
                     continue
                 titles.append(title)
+        self._last_topics = titles[:6]
         return "；".join(titles[:6])
 
     def _search_material(self, umo: str = "") -> str:
@@ -467,20 +546,234 @@ class ProactiveEngine:
                 conn.close()
         except Exception:
             return ""
-        recent = self._recent_contents(umo)
+        recent = self._recent_contents(umo) + self._used_topics(umo)
         picked: list[str] = []
         for row in rows:
             query = str(row[0]).strip() if row and str(row[0]).strip() else ""
             if not query or self._is_repeat(query, recent) or self._is_repeat(query, picked):
                 continue
             picked.append(query)
+        self._last_topics = picked[:8]
         return "；".join(picked[:8])
 
     def _material(self, source: str, umo: str = "") -> str:
+        self._last_topics = []
         if source == "douyin":
             return self._douyin_material(umo)
         if source == "search":
             return self._search_material(umo)
+        return ""
+
+    # ------------------------------------------------------------------ #
+    # 上下文：让主动消息接得住上一句
+    # ------------------------------------------------------------------ #
+    def _astrbot_db_path(self):
+        """AstrBot 主库路径（会话历史在里面），拿不到就返回 None。"""
+        try:
+            path = self.data_dir.parent.parent / "data_v4.db"
+            return path if path.exists() else None
+        except Exception:
+            return None
+
+    def _render_dialogue_message(self, message: Any) -> str:
+        """把一条会话消息压成一行「谁：说了什么」。"""
+        if not isinstance(message, dict):
+            return ""
+        role = str(message.get("role") or "")
+        content = message.get("content")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    kind = str(part.get("type") or "")
+                    if kind == "text":
+                        parts.append(str(part.get("text") or ""))
+                    elif kind in ("image_url", "image"):
+                        parts.append("[图片]")
+                elif part:
+                    parts.append(str(part))
+            text = " ".join(parts)
+        # 去掉系统注入的时间戳、图片占位、情绪标记，只留人话
+        text = re.sub(r"<system_reminder>.*?</system_reminder>", "", text, flags=re.S)
+        text = re.sub(r"\[Image[^\]]*\]", "", text)
+        text = re.sub(r"&&\w+&&", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return ""
+        who = "主人" if role == "user" else "我"
+        return f"{who}：{text[:90]}"
+
+    def _recent_dialogue(self, umo: str, limit: int = 10) -> str:
+        """读本会话最近的真实对话。读不到就返回空串，绝不编造。"""
+        try:
+            limit = max(0, min(int(limit or 0), 20))
+        except Exception:
+            limit = 10
+        if limit <= 0:
+            return ""
+        db = self._astrbot_db_path()
+        if db is None:
+            return ""
+        messages: list[Any] = []
+        try:
+            conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=3)
+            try:
+                row = conn.execute(
+                    "SELECT content FROM conversations WHERE user_id=?"
+                    " ORDER BY updated_at DESC LIMIT 1", (umo,)).fetchone()
+            finally:
+                conn.close()
+            if row and row[0]:
+                parsed = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                if isinstance(parsed, list):
+                    messages = parsed
+        except Exception as exc:
+            logger.debug(f"[token_panel] 读取最近对话失败: {exc}")
+        lines = [
+            line for line in (self._render_dialogue_message(m) for m in messages[-limit:])
+            if line
+        ]
+        return "\n".join(lines)
+
+    def _build_compose_prompt(self, material: str, dialogue: str, soft: bool) -> str:
+        """拼主动消息的写作指令（纯函数，方便单测）。"""
+        now = datetime.now()
+        weekday = "一二三四五六日"[now.weekday()]
+        rules = [
+            "你现在要主动给主人发一条消息（不是回复，是主动搭话）。",
+            f"现在是 {now.strftime('%Y-%m-%d %H:%M')}（周{weekday}）。这句话必须符合这个时间点："
+            "白天不许说“还不睡”“半夜”，也不要凭空猜他刚在干什么。",
+        ]
+        if dialogue:
+            rules.append("【最近的真实对话（从旧到新）】\n" + dialogue)
+            rules.append(
+                "上面最后一句是我说的、主人还没回。要接着这个话头说，或者自然岔开，不能装作没发生过。"
+            )
+        else:
+            rules.append("【最近对话】没读到记录，那就只说一句轻量的日常话，不要编细节。")
+        if material:
+            rules.append(f"【可以顺口提一句的素材】{material}")
+        else:
+            rules.append("【素材】没有。不要假装刚刷到、刚看到什么。")
+        rules += [
+            "硬性要求：",
+            "1. 只说你确定的事：只允许引用【最近对话】和【素材】里出现过的内容，其余一律不许编。",
+            "2. 不编造自己的动作（“我刚吃了”“我刚刷到”“我看到一个”），素材里没有就是没有。",
+            "3. 不复述素材标题，不出现“素材/搜索/抖音/视频”这些词，不用 # 和 @。",
+            "4. 一句话，最多 40 个字，口语，像随手发的；不要表情、不要列表、不要旁白。",
+            "5. 如果此刻真没什么值得说的，就只输出 SKIP 四个字母，别的什么都不要写。",
+        ]
+        if soft:
+            rules.append("6. 语气柔和克制，别热情过头，一次最多一个问句。")
+        return "\n".join(rules)
+
+    async def _review_message(
+        self, umo: str, text: str, material: str, dialogue: str
+    ) -> tuple[bool, str]:
+        """发送前自检：这句话发出去会不会显得莫名其妙。"""
+        prompt = (
+            "你是严格的审稿人。下面是角色准备主动发给主人的一句话，以及它当时能看到的上下文。"
+            "判断这句话能不能原样发出去。\n\n"
+            f"【准备发的话】{text}\n\n"
+            f"【最近对话】\n{dialogue or '（无）'}\n\n"
+            f"【素材】{material or '（无）'}\n\n"
+            "命中任一条就驳回：\n"
+            "1. 和最近对话完全无关，像自说自话；\n"
+            "2. 编造了上下文里没有的事实（自己刚做了什么、看到什么、主人刚做了什么）；\n"
+            "3. 时间点明显不对（比如下午说“你怎么还不睡”）；\n"
+            "4. 空话套话，或复读上下文里的原句；\n"
+            "5. 语义混乱、指代不清、读起来像病句。\n"
+            '只输出 JSON：{"verdict":"send"} 或 {"verdict":"drop","why":"不超过15字"}'
+        )
+        reason = self._precheck_message(text, material, dialogue)
+        if reason:
+            return False, reason
+        try:
+            provider = await self.plugin.context.get_using_provider_async(umo=umo)
+            if provider is None:
+                return True, ""
+            raw = ""
+            for attempt in range(2):
+                try:
+                    resp = await asyncio.wait_for(
+                        provider.text_chat(
+                            prompt=prompt,
+                            system_prompt="你是极简审稿器，只输出 JSON，不要解释。",
+                            contexts=[],
+                        ),
+                        timeout=25,
+                    )
+                    raw = str(getattr(resp, "completion_text", "") or "")
+                except Exception as exc:
+                    logger.warning(f"[token_panel] 主动消息自检调用失败: {exc}")
+                    if attempt == 1:
+                        return True, ""
+                    continue
+                verdict = self._parse_verdict(raw)
+                if verdict is not None:
+                    why_match = re.search(r'"why"\s*:\s*"?([^",}]{0,40})', raw)
+                    return verdict, (why_match.group(1) if why_match else "")
+                logger.debug(f"[token_panel] 审稿输出无法解析，重试: {raw[:60]!r}")
+            logger.info(f"[token_panel] 审稿连续无有效结论，按通过处理: {text[:30]}")
+            return True, ""
+        except Exception as exc:
+            logger.warning(f"[token_panel] 主动消息自检异常，按通过处理: {exc}")
+            return True, ""
+
+    def _parse_verdict(self, raw: str):
+        """从审稿输出里取结论。返回 True=放行 False=驳回 None=读不出。"""
+        text = (raw or "").strip()
+        if not text:
+            return None
+        match = re.search(r'"verdict"\s*:\s*"(send|drop)"', text, re.I)
+        if not match:
+            # 兼容被截断/带代码块的输出
+            match = re.search(r'verdict\s*[:=]\s*"?(send|drop)', text, re.I)
+        if match:
+            return match.group(1).lower() == "send"
+        lowered = text.lower()
+        if re.search(r'\bdrop\b|驳回|不发', lowered):
+            return False
+        if re.search(r'\bsend\b|放行|可以发', lowered):
+            return True
+        return None
+
+    def _precheck_message(self, text: str, material: str, dialogue: str) -> str:
+        """零成本硬规则：明显编造/时间错位直接驳回，不浪费一次模型调用。"""
+        body = (text or "").strip()
+        if not body:
+            return "空消息"
+        context = f"{material}\n{dialogue}"
+        # 1) 假装刚看了外部内容，但上下文里没有这条素材
+        source_hit = re.search(r"(刚|刚刚|方才)?(刷到|刷到了|看到一个|刷了个|视频里说|热搜上|抖音上|网上看到)", body)
+        if source_hit:
+            if not material.strip():
+                return "编造外部素材"
+            claim = re.split(r"[，。！？,.!?\s]", body[source_hit.end():])[0][:12]
+            grams = {claim[i:i + 2] for i in range(len(claim) - 1)}
+            if len(claim) >= 4 and len([g for g in grams if g in material]) < 2:
+                return "素材对不上"
+        # 2) 时间点错位：白天说困/说睡
+        hour = datetime.now().hour
+        if 9 <= hour < 20 and re.search(r"(还不睡|还没睡|该睡了|去睡吧|犯困|好困|困了|晚安|半夜|凌晨)", body):
+            return "时间点不对"
+        # 3) 编造自己的动作，且上下文里没有
+        for act in re.findall(r"我刚(吃了|喝了|看了|刷了|玩了|出门|回来|睡醒)", body):
+            if act not in context:
+                return "编造自身动作"
+        # 4) 原样复读对方上一句
+        if dialogue:
+            last = ""
+            for line in reversed(dialogue.splitlines()):
+                line = line.strip()
+                if line:
+                    last = re.sub(r"^(主人|我)：", "", line)
+                    break
+            if last and len(last) >= 6 and last[:8] in body:
+                return "复读上一句"
         return ""
 
     # ------------------------------------------------------------------ #
@@ -500,20 +793,19 @@ class ProactiveEngine:
 
     async def _compose(self, umo: str, source: str, soft: bool) -> str:
         material = self._material(source, umo)
-        label = SOURCE_LABELS.get(source, "自由闲聊") if material else "自由闲聊"
+        self._last_material = material
+        try:
+            lines = int(self.settings().get("dialogue_lines") or 10)
+        except Exception:
+            lines = 10
+        dialogue = ""
+        try:
+            dialogue = self._recent_dialogue(umo, lines)
+        except Exception as exc:
+            logger.debug(f"[token_panel] 组装对话上下文失败: {exc}")
+        self._last_dialogue = dialogue
         persona = await self._persona_prompt(umo)
-        rules = [
-            "你现在要主动给主人发一条消息（不是回复，是主动搭话）。",
-            f"素材类型：{label}。",
-        ]
-        if material:
-            rules.append(f"可用素材（只能基于它说，不许编造）：{material}")
-        else:
-            rules.append("没有外部素材，就聊聊日常、关心一下主人最近的状态。")
-        rules.append("要求：一句话到两句话，口语化，不超过60字，不要表情包，不要列表，不要复述素材全文，不要提到“素材”“搜索”“抖音”这些词。")
-        if soft:
-            rules.append("语气要柔和、自然，像熟人随口一提，避免突兀和过度热情。")
-        prompt = "\n".join(rules)
+        prompt = self._build_compose_prompt(material, dialogue, soft)
         try:
             provider = await self.plugin.context.get_using_provider_async(umo=umo)
             if provider is None:
@@ -528,6 +820,9 @@ class ProactiveEngine:
             return ""
         text = re.sub(r"^[\"“'‘]+|[\"”'’]+$", "", text).strip()
         text = text.replace("\n", " ").strip()
+        if text.strip("[]【】 ").upper() in ("", "SKIP"):
+            logger.info("[token_panel] 模型判断此刻无话可说（SKIP），本轮不发送")
+            return ""
         return text[:120]
 
     async def _send(self, umo: str, text: str) -> bool:
@@ -623,11 +918,23 @@ class ProactiveEngine:
                 text = await self._compose(umo, src, bool(cfg.get("soft_mode", True)))
                 if not text:
                     continue
+                # 发送前自检：宁可这一条不发，也别发出去让人一脸问号
+                if cfg.get("review", True):
+                    ok, why = await self._review_message(
+                        umo, text, self._last_material, self._last_dialogue
+                    )
+                    if not ok:
+                        logger.info(
+                            f"[token_panel] 主动消息自检未通过，已丢弃：{text[:40]}"
+                            f"（{why or '未说明'}）"
+                        )
+                        continue
                 if not self._claim_slot(umo, datetime.now(), wait):
                     logger.info(f"[token_panel] 主动消息被其它调度抢占，跳过 {umo}")
                     break
                 if await self._send(umo, text):
                     self.add_log(umo, text, SOURCE_LABELS[src], "sent")
+                    self._mark_used(umo, self._last_topics)
                     logger.info(f"[token_panel] 主动消息已发送 {umo} 素材={src} 长度={len(text)}")
                     try:
                         from .eventlog import log_event

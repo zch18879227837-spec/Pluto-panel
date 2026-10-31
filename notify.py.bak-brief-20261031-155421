@@ -1,0 +1,555 @@
+"""详细推理完成通知（v1.7.0，增量模块）。
+
+设计目标：只在「一整轮推理彻底结束」后发一条汇总通知，绝不在流式过程中刷屏。
+实现方式（全部走 AstrBot 官方钩子，不碰核心代码）：
+
+    on_llm_request   -> begin()   记下开始时间、会话、消息 id
+    on_llm_response  -> note()    记下本轮用量/模型；识别错误响应
+    on_agent_done    -> finish()  推理彻底结束：算耗时、发通知、取消看门狗
+    看门狗协程       -> 超时仍没等到 finish 时，按「超时/异常终止」发失败通知
+
+隔离原则：所有数据都在 settings.json 的 notify 段与 notify_log.json 里，
+不占用 token 统计、压缩日志、日记、主动消息的任何字段；任何异常都只写日志，不上抛。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import random
+import re
+import sqlite3
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable
+
+from astrbot.api import logger
+from astrbot.api.message_components import Plain, Record
+from astrbot.core.message.message_event_result import MessageChain
+
+# --------------------------------------------------------------------------- #
+# 默认配置：全部可在面板「推理通知」页修改
+# --------------------------------------------------------------------------- #
+NOTIFY_DEFAULTS: dict[str, Any] = {
+    "enabled": True,              # 推理通知总开关
+    "mode": "session",            # session=仅原会话  admin=仅管理员私聊  both=双推送
+    "admin_qqs": "",              # 管理员接收 QQ，逗号/空格分隔，留空则用 AstrBot 的 admins_id
+    "group_enabled": False,       # 群聊是否允许推送
+    "success_prefix": "✅ 本次AI推理任务已完成",
+    "fail_prefix": "❌ 本次推理异常终止",
+    # ---- 简短通知式文案 ----
+    # brief_style=True 时不播报系统汇报，改用下面的通知模板（随机挑一条）。
+    # 全部是「告知事实」的说法，不用第一人称替模型表态。
+    # 模板可用占位符：{elapsed} 秒 {model} 模型名 {in} {out} {total} 是 token 数
+    # {scene} 会话场景 {memory} 记忆状态 {reason} 失败原因
+    "brief_style": True,
+    "success_templates": [
+        "推理完成 · {elapsed} 秒",
+        "这轮对话处理完成",
+        "处理完成 · {elapsed} 秒",
+        "推理结束，用时 {elapsed} 秒",
+    ],
+    "fail_templates": [
+        "推理失败 · {reason}",
+        "本轮推理失败 · {reason}",
+        "推理中断 · {reason}",
+    ],
+    # compact=一句话附带括注  verbose=老版逐行汇报  off=只留通知那行
+    "detail_style": "compact",
+    "show_tokens": True,          # 显示 Token 统计
+    "show_elapsed": True,         # 显示推理耗时
+    "show_memory": True,          # 显示记忆写入状态
+    "tts": False,                 # 是否语音播报（复用 AstrBot 原生 TTS Provider）
+    "timeout_seconds": 240,       # 看门狗：超过这个秒数仍未结束则发失败通知
+    "max_log": 100,               # 通知日志保留条数
+}
+
+_QQ_RE = re.compile(r"^\d{5,12}$")
+
+
+def _now_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _fmt_int(value: Any) -> str:
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+class NotifyService:
+    """推理完成通知服务；由主插件实例化并调用，内部无全局状态。"""
+
+    def __init__(
+        self,
+        context: Any,
+        settings_getter: Callable[[], dict[str, Any]],
+        debug_logger: Callable[[str], None],
+        data_dir: Path,
+    ) -> None:
+        self.context = context
+        self._settings = settings_getter
+        self._dbg = debug_logger
+        self.data_dir = Path(data_dir)
+        self.log_path = self.data_dir / "notify_log.json"
+        self._turns: dict[str, dict[str, Any]] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._memory_db = self._find_memory_db()
+
+    # ------------------------------------------------------------------ #
+    # 配置
+    # ------------------------------------------------------------------ #
+    def cfg(self) -> dict[str, Any]:
+        cfg = dict(NOTIFY_DEFAULTS)
+        try:
+            raw = self._settings().get("notify") or {}
+            if isinstance(raw, dict):
+                cfg.update({k: v for k, v in raw.items() if k in NOTIFY_DEFAULTS})
+        except Exception as exc:  # 配置坏了也不影响本体
+            self._dbg(f"读取推理通知配置失败: {exc}")
+        # 兼容旧键名 persona_style（当时是「人设口吻」，现在是「简短通知」）
+        try:
+            raw = self._settings().get("notify") or {}
+            if isinstance(raw, dict) and "persona_style" in raw and "brief_style" not in raw:
+                cfg["brief_style"] = bool(raw["persona_style"])
+        except Exception:
+            pass
+        return cfg
+
+    def update(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """把 patch 写回 settings.json 的 notify 段（由主插件负责落盘）。"""
+        cfg = self.cfg()
+        for key, value in (patch or {}).items():
+            if key == "persona_style":  # 旧键名兼容
+                key = "brief_style"
+            if key not in NOTIFY_DEFAULTS:
+                continue
+            if key in ("enabled", "group_enabled", "show_tokens", "show_elapsed", "show_memory",
+                       "tts", "brief_style"):
+                cfg[key] = bool(value)
+            elif key in ("timeout_seconds", "max_log"):
+                try:
+                    cfg[key] = max(30, min(1800, int(value)))
+                except (TypeError, ValueError):
+                    pass
+            elif key in ("success_templates", "fail_templates"):
+                items = value if isinstance(value, list) else re.split(r"[\n|]+", str(value or ""))
+                clean = [str(x).strip()[:80] for x in items if str(x).strip()][:8]
+                if clean:  # 全空视为没填，保留默认，避免一条都发不出来
+                    cfg[key] = clean
+            elif key == "detail_style":
+                text = str(value or "").strip()
+                if text in ("compact", "verbose", "off"):
+                    cfg[key] = text
+            elif key == "mode":
+                text = str(value or "").strip()
+                if text in ("session", "admin", "both"):
+                    cfg[key] = text
+            elif key == "admin_qqs":
+                cfg[key] = str(value or "").strip()[:200]
+            else:
+                # 前缀文案：空串视为「没填」，保留默认值，避免把通知标题清掉
+                text = str(value or "").strip()
+                if text:
+                    cfg[key] = text[:60]
+        return cfg
+
+    # ------------------------------------------------------------------ #
+    # 记忆库：只用计数判断「这一轮有没有新增」，不读写内容
+    # ------------------------------------------------------------------ #
+    def _find_memory_db(self) -> Path:
+        base = self.data_dir.parent / "astrbot_plugin_livingmemory" / "livingmemory.db"
+        return base
+
+    def _memory_count(self) -> int:
+        try:
+            path = self._memory_db
+            if not path.exists():
+                return -1
+            conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=1)
+            try:
+                row = conn.execute("SELECT COUNT(*) FROM memory_atoms").fetchone()
+                return int(row[0]) if row else -1
+            finally:
+                conn.close()
+        except Exception:
+            return -1
+
+    # ------------------------------------------------------------------ #
+    # 轮次状态
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _key(event: Any) -> str:
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        msg_id = ""
+        try:
+            msg_id = str(event.message_obj.message_id or "")
+        except Exception:
+            msg_id = ""
+        return f"{umo}#{msg_id or id(event)}"
+
+    @staticmethod
+    def _scene(event: Any) -> str:
+        try:
+            return "私聊" if event.is_private_chat() else "群聊"
+        except Exception:
+            return "未知"
+
+    @staticmethod
+    def _platform_of(umo: str) -> str:
+        return umo.split(":", 1)[0] if umo else ""
+
+    def _admin_qqs(self, cfg: dict[str, Any]) -> list[str]:
+        raw = str(cfg.get("admin_qqs") or "")
+        found = [q for q in re.split(r"[,，\s;；]+", raw) if _QQ_RE.match(q)]
+        if found:
+            return found
+        try:
+            admins = self.context.get_config().get("admins_id") or []
+            return [str(a) for a in admins if _QQ_RE.match(str(a))]
+        except Exception:
+            return []
+
+    # Start of one reasoning round (on_llm_request): remember time, session and message id.
+    def begin(self, event: Any) -> None:
+        """on_llm_request：开始一轮。"""
+        cfg = self.cfg()
+        if not cfg["enabled"]:
+            return
+        if not self._allowed_scene(event, cfg):
+            return
+        key = self._key(event)
+        if key in self._turns:
+            return  # 同一轮内多次请求（工具调用）不重置计时
+        self._turns[key] = {
+            "t0": time.monotonic(),
+            "umo": str(getattr(event, "unified_msg_origin", "") or ""),
+            "scene": self._scene(event),
+            "sender": str(getattr(event, "get_sender_id", lambda: "")() or ""),
+            "memory_before": self._memory_count(),
+            "usage": None,
+            "model": "",
+            "error": "",
+            "done": False,
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            self._tasks[key] = loop.create_task(self._watchdog(key, int(cfg["timeout_seconds"])))
+        except Exception as exc:
+            self._dbg(f"看门狗启动失败: {exc}")
+
+    async def note_response(self, event: Any, resp: Any) -> None:
+        """on_llm_response：记用量/模型，并识别错误响应（不发送、不刷屏）。"""
+        key = self._key(event)
+        state = self._turns.get(key)
+        if not state:
+            return
+        try:
+            if getattr(resp, "usage", None) is not None:
+                state["usage"] = resp.usage
+            role = str(getattr(resp, "role", "") or "")
+            text = str(getattr(resp, "completion_text", "") or "")
+            if role == "err" or "LLM 请求失败" in text or text.startswith("[错误]"):
+                state["error"] = self._short_error(text)
+        except Exception as exc:
+            self._dbg(f"记录推理响应失败: {exc}")
+
+    # End of the round (on_agent_done): summarize usage, deliver exactly one notification,
+    # then cancel the watchdog.
+    async def finish(self, event: Any, run_context: Any, response: Any) -> None:
+        """on_agent_done：整轮彻底结束，发一条汇总通知。"""
+        key = self._key(event)
+        state = self._turns.pop(key, None)
+        task = self._tasks.pop(key, None)
+        if task and not task.done():
+            task.cancel()
+        if not state or state.get("done"):
+            return
+        state["done"] = True
+        cfg = self.cfg()
+        if not cfg["enabled"]:
+            return
+        try:
+            usage = getattr(response, "usage", None) or state.get("usage")
+            model = await self._model_name(event)
+            elapsed = int(max(0, time.monotonic() - state["t0"]))
+            memory_after = self._memory_count()
+            text = self._success_text(cfg, model, elapsed, usage, state, memory_after)
+        except Exception as exc:
+            logger.warning(f"[token_panel] 生成推理完成通知失败: {exc}")
+            return
+        await self._deliver(cfg, event, state, text, ok=True)
+
+    async def _watchdog(self, key: str, seconds: int) -> None:
+        """超时兜底：迟迟没等到 on_agent_done 就发失败通知，保证不静默。"""
+        try:
+            await asyncio.sleep(max(30, seconds))
+        except asyncio.CancelledError:
+            return
+        state = self._turns.pop(key, None)
+        self._tasks.pop(key, None)
+        if not state or state.get("done"):
+            return
+        state["done"] = True
+        cfg = self.cfg()
+        if not cfg["enabled"]:
+            return
+        elapsed = int(max(0, time.monotonic() - state["t0"]))
+        reason = state.get("error") or f"超时（{seconds} 秒未完成）"
+        text = self._fail_text(cfg, reason, state, elapsed)
+        try:
+            await self._deliver(cfg, event=None, state=state, text=text, ok=False)
+        except Exception as exc:
+            self._dbg(f"发送失败通知出错: {exc}")
+
+    # ------------------------------------------------------------------ #
+    # 文案
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _short_error(text: str) -> str:
+        text = (text or "").strip().replace("\n", " ")
+        low = text.lower()
+        if "context length" in low or "上下文" in text or "too long" in low:
+            return "上下文过长"
+        if "timeout" in low or "超时" in text:
+            return "请求超时"
+        if not text:
+            return "模型返回错误"
+        return text[:60]
+
+    def _success_text(self, cfg: dict[str, Any], model: str, elapsed: int, usage: Any,
+                      state: dict[str, Any], memory_after: int) -> str:
+        inp = int(getattr(usage, "input", 0) or 0)
+        out = int(getattr(usage, "output", 0) or 0)
+        ctx = {
+            "elapsed": elapsed,
+            "model": model or "未知模型",
+            "in": _fmt_int(inp),
+            "out": _fmt_int(out),
+            "total": _fmt_int(inp + out),
+            "scene": state.get("scene") or "未知",
+            "memory": self._memory_word(state, memory_after),
+            "reason": "",
+        }
+        if cfg.get("brief_style"):
+            tpl = self._pick(cfg.get("success_templates") or NOTIFY_DEFAULTS["success_templates"])
+            body = self._render(tpl, ctx, "推理完成。")
+            detail = self._detail_line(cfg, ctx, state, memory_after,
+                                       drop_elapsed="{elapsed}" in tpl)
+            return f"{body}\n{detail}" if detail else body
+        lines = [str(cfg["success_prefix"] or NOTIFY_DEFAULTS["success_prefix"]).strip()]
+        if model:
+            lines.append(f"🤖 使用模型：{model}")
+        if cfg["show_elapsed"]:
+            lines.append(f"⏱️ 推理耗时：{elapsed} 秒")
+        if cfg["show_tokens"]:
+            lines.append(f"📥 输入 Token：{ctx['in']}")
+            lines.append(f"📤 输出 Token：{ctx['out']}")
+            lines.append(f"📊 本次总消耗 Token：{ctx['total']}")
+        if cfg["show_memory"]:
+            before = int(state.get("memory_before", -1))
+            if before < 0 or memory_after < 0:
+                lines.append("💾 记忆写入状态：未启用记忆插件")
+            else:
+                lines.append("💾 记忆写入状态：已写入" if memory_after > before else "💾 记忆写入状态：无新增")
+        lines.append(f"🌐 会话场景：{state.get('scene') or '未知'}")
+        return "\n".join(lines)
+
+    def _fail_text(self, cfg: dict[str, Any], reason: str, state: dict[str, Any], elapsed: int) -> str:
+        if cfg.get("brief_style"):
+            ctx = {
+                "elapsed": elapsed, "model": "", "in": "—", "out": "—", "total": "—",
+                "scene": state.get("scene") or "未知", "memory": "",
+                "reason": self._short_error(reason) or "未知错误",
+            }
+            tpl = self._pick(cfg.get("fail_templates") or NOTIFY_DEFAULTS["fail_templates"])
+            body = self._render(tpl, ctx, "推理失败。")
+            if cfg.get("detail_style") == "off":
+                return body
+            tail = [] if "{reason}" in tpl else [ctx["reason"]]
+            if cfg.get("detail_style") != "compact" or "{elapsed}" not in tpl:
+                tail.append(f"{elapsed} 秒")
+            return f"{body}\n（{' · '.join(tail)}）" if tail else body
+        lines = [str(cfg["fail_prefix"] or NOTIFY_DEFAULTS["fail_prefix"]).strip()]
+        lines.append(f"原因：{reason}")
+        lines.append(f"场景：{state.get('scene') or '未知'}")
+        lines.append(f"耗时：{elapsed} 秒终止")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------ #
+    # 简短通知小工具
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _pick(templates: Any) -> str:
+        """从模板池里随机挑一条；池子坏了就返回空串由调用方兜底。"""
+        try:
+            pool = [str(t) for t in templates if str(t).strip()]
+        except TypeError:
+            pool = []
+        if not pool:
+            return ""
+        try:
+            return random.choice(pool)
+        except Exception:
+            return pool[0]
+
+    @staticmethod
+    def _render(template: str, ctx: dict[str, Any], fallback: str) -> str:
+        """套模板；占位符写错也不让它抛异常，缺变量就退化成兜底句。"""
+        text = (template or "").strip() or fallback
+        try:
+            return text.format(**ctx).strip() or fallback
+        except (KeyError, IndexError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _memory_word(state: dict[str, Any], memory_after: int) -> str:
+        before = int(state.get("memory_before", -1))
+        if before < 0 or memory_after < 0:
+            return ""
+        return "记忆已写入" if memory_after > before else ""
+
+    def _detail_line(self, cfg: dict[str, Any], ctx: dict[str, Any],
+                     state: dict[str, Any], memory_after: int,
+                     drop_elapsed: bool = False) -> str:
+        """通知那行后面跟的括注；detail_style=off 时不加。"""
+        style = cfg.get("detail_style")
+        if style == "off":
+            return ""
+        show_elapsed = bool(cfg["show_elapsed"]) and not drop_elapsed
+        word = self._memory_word(state, memory_after) if cfg["show_memory"] else ""
+        parts: list[str] = []
+        if style == "verbose":
+            if ctx["model"]:
+                parts.append(f"模型 {ctx['model']}")
+            if show_elapsed:
+                parts.append(f"{ctx['elapsed']} 秒")
+            if cfg["show_tokens"]:
+                parts.append(f"输入 {ctx['in']} / 输出 {ctx['out']} / 共 {ctx['total']} token")
+            if word:
+                parts.append(word)
+            parts.append(f"场景 {ctx['scene']}")
+        else:
+            if ctx["model"]:
+                parts.append(str(ctx["model"]))
+            if show_elapsed:
+                parts.append(f"{ctx['elapsed']} 秒")
+            if cfg["show_tokens"]:
+                parts.append(f"{ctx['total']} token")
+            if word:
+                parts.append(word)
+        return f"（{' · '.join(parts)}）" if parts else ""
+
+    # ------------------------------------------------------------------ #
+    # 投递
+    # ------------------------------------------------------------------ #
+    def _allowed_scene(self, event: Any, cfg: dict[str, Any]) -> bool:
+        try:
+            if event.is_private_chat():
+                return True
+        except Exception:
+            return True
+        return bool(cfg["group_enabled"])
+
+    def _targets(self, umo: str, sender: str, cfg: dict[str, Any]) -> list[str]:
+        mode = cfg["mode"]
+        out: list[str] = []
+        platform = self._platform_of(umo)
+        if mode in ("session", "both") and umo:
+            out.append(umo)
+        if mode in ("admin", "both"):
+            for qq in self._admin_qqs(cfg):
+                target = f"{platform}:FriendMessage:{qq}"
+                if target and target not in out and target != umo:
+                    out.append(target)
+        return out
+
+    async def _model_name(self, event: Any) -> str:
+        try:
+            prov = await self.context.get_using_provider_async(
+                umo=str(getattr(event, "unified_msg_origin", "") or "")
+            )
+            if prov is not None:
+                return str(prov.get_model() or "")
+        except Exception:
+            pass
+        return ""
+
+    async def _deliver(self, cfg: dict[str, Any], event: Any, state: dict[str, Any],
+                       text: str, ok: bool) -> None:
+        umo = str(state.get("umo") or "")
+        targets = self._targets(umo, str(state.get("sender") or ""), cfg)
+        if not targets:
+            self._dbg("推理通知没有可投递目标（模式/管理员为空）")
+            return
+        for target in targets:
+            try:
+                await self.context.send_message(target, MessageChain([Plain(text)]))
+            except Exception as exc:
+                logger.warning(f"[token_panel] 推理通知发送失败 {target}: {exc}")
+        if cfg.get("tts"):
+            await self._speak(cfg, targets, text)
+        self._append_log({
+            "time": _now_text(), "ok": bool(ok), "scene": state.get("scene"),
+            "umo": umo, "targets": targets, "text": text,
+        })
+        try:
+            from .eventlog import log_event
+            log_event(
+                "信息" if ok else "警告", "系统", "通知",
+                f"推理完成通知（{'成功' if ok else '失败'}）→ {len(targets)} 个目标",
+                umo=umo, ok=bool(ok),
+            )
+        except Exception:
+            pass
+
+    async def _speak(self, cfg: dict[str, Any], targets: list[str], text: str) -> None:
+        """语音播报：复用 AstrBot 原生 TTS Provider，失败时静默回退为纯文本。"""
+        try:
+            prov = await self.context.get_using_tts_provider_async()
+            if prov is None:
+                return
+            spoken = text.replace("✅", "").replace("❌", "")
+            # 念出来时去掉括注里的技术细节，只留口吻那句
+            spoken = re.sub(r"（[^）]*）", "。", spoken)
+            spoken = re.sub(r"(🤖|⏱️|📥|📤|📊|💾|🌐)", "。", spoken)[:200]
+            path = await asyncio.wait_for(prov.get_audio(spoken), timeout=30)
+            if not path or not os.path.exists(path):
+                return
+            for target in targets:
+                await self.context.send_message(target, MessageChain([Record(file=path)]))
+        except Exception as exc:
+            self._dbg(f"语音播报跳过: {exc}")
+
+    # ------------------------------------------------------------------ #
+    # 日志（独立文件，不与已有统计混用）
+    # ------------------------------------------------------------------ #
+    def log_rows(self, limit: int = 30) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        try:
+            if self.log_path.exists():
+                rows = json.loads(self.log_path.read_text(encoding="utf-8"))
+        except Exception:
+            rows = []
+        return rows[: max(1, int(limit))]
+
+    def _append_log(self, row: dict[str, Any]) -> None:
+        try:
+            cfg = self.cfg()
+            rows = self.log_rows(int(cfg.get("max_log", 100)))
+            rows.insert(0, row)
+            self.log_path.write_text(
+                json.dumps(rows[: int(cfg.get("max_log", 100))], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            self._dbg(f"写通知日志失败: {exc}")
+
+    def clear_log(self) -> None:
+        try:
+            self.log_path.write_text("[]", encoding="utf-8")
+        except Exception:
+            pass

@@ -2,7 +2,7 @@
   "id": "astrbot_plugin_token_panel",
   "name": "astrbot_plugin_token_panel",
   "display_name": "PLUTO panel（普鲁托面板）",
-  "version": "1.10.3",
+  "version": "1.16.2",
   "author": "Charon",
   "license": "MIT",
   "description": "会话上下文 Token 用量可视化面板：进度条、预警阈值、自动播报、一键清空；内置上下文统计（/ctx）、压缩与承接（/ctx_compress、/ctx_continue、/ctx_sessions、/ctx_switch）；联网搜索与抖音游客浏览监控，抖音风控调速（近 3 天加权分数、90 分钟回升周期、8 秒停留硬底线）；带情绪等级与静默策略的精细化主动消息与会话日记本；详细推理完成通知（整轮结束单条汇总、三档投递、可选语音播报）与语音合成（复用原生 TTS、自然语言强制触发、长文分段）；内置联网搜索（web_search 工具 + 检索日志 + 面板管理）；新增统一事件日志（SQLite + JSONL 双写，面板可维护）。",
