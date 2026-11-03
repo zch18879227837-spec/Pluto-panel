@@ -20,7 +20,7 @@ from astrbot.core.message.message_event_result import MessageChain
 
 AGENT_REPORT_DEFAULTS: dict[str, Any] = {
     "enabled": True,
-    "umo": "napcat:FriendMessage:1703346440",   # 默认发给主人私聊
+    "umo": "napcat:FriendMessage:10001",   # 占位示例：请改成你自己的会话号（面板「主动汇报」里可改）
     "title": "🧠 DSH 这轮完事",
     "show_tokens": True,      # 输入/输出/缓存
     "show_cost": True,        # 花费

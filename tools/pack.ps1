@@ -52,7 +52,8 @@ if (-not (Test-Path (Join-Path $Root "metadata.yaml"))) {
 
 }
 
-if (-not $OutDir) { $OutDir = Join-Path $Root "dist" }
+# v1.16.3：默认输出到插件目录之外，避免 dist/*.zip 被误打包进上传包
+if (-not $OutDir) { $OutDir = Join-Path (Split-Path -Parent $Root) "release" }
 
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
 
@@ -72,7 +73,7 @@ New-Item -ItemType Directory -Path $target -Force | Out-Null
 
 
 
-$skipDirs = @("__pycache__", "data", "dist", ".git", ".venv", "venv", "carry_backups", ".github", "tools", "docs", "douyin_captures", "plugin_data")
+$skipDirs = @("__pycache__", "data", "dist", ".git", ".github", ".venv", "venv", "carry_backups", "tools", "docs", "douyin_captures", "plugin_data", "node_modules", ".pytest_cache", ".mypy_cache", "tests")
 
 $skipFiles = @("settings.json", "session_meta.json", "compress_log.json")
 
@@ -170,6 +171,24 @@ $hasView = $entries -contains "$PluginName/views/dashboard/index.html"
 
 Write-Host ""
 
+# ---- v1.16.3：垃圾/敏感文件硬性拦截（插件市场审核要求）----
+$forbiddenPattern = '(?i)(__pycache__|/dist/|\.pyc$|\.bak|cmd_config\.json|/data/|plugin_data/|douyin_captures/|\.db$|\.log$|\.jsonl$|/settings\.json$|\.zip$)'
+$forbidden = $entries | Where-Object { $_ -match $forbiddenPattern }
+
+if ($forbidden.Count -gt 0) {
+
+    Write-Host ""
+
+    Write-Host "  [失败] 包里混进了不该发布的文件（缓存/备份/运行数据/旧构建）" -ForegroundColor Red
+
+    $forbidden | Select-Object -First 8 | ForEach-Object { Write-Host "         $_" -ForegroundColor Red }
+
+    Write-Host "         请把插件目录里的 __pycache__、*.bak*、dist/、data/、plugin_data/ 清掉后重打。" -ForegroundColor Yellow
+
+    exit 1
+
+}
+
 if ($badRoot.Count -gt 0 -or -not $hasMeta -or -not $hasMain) {
 
     Write-Host "  [失败] zip 结构不符合插件市场要求" -ForegroundColor Red
@@ -199,6 +218,10 @@ Write-Host "  [完成] $out" -ForegroundColor Green
 Write-Host "         文件数 $count ｜ 体积 $sizeMB MB ｜ 根目录 $PluginName/" -ForegroundColor Green
 
 Write-Host "         校验：metadata.yaml OK ｜ main.py OK ｜ views/dashboard/index.html $viewMark" -ForegroundColor Green
+
+Write-Host "         无 __pycache__ / *.bak / dist / data / *.db / *.log 等垃圾文件" -ForegroundColor Green
+
+Write-Host "         条目数 $($entries.Count)" -ForegroundColor Green
 
 Write-Host ""
 

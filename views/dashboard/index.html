@@ -696,7 +696,8 @@
   .pill.warn { color: var(--warn); border-color: rgba(200, 148, 47, 0.4); background: rgba(200, 148, 47, 0.08); }
   .pill.high { color: var(--high); border-color: rgba(178, 58, 46, 0.4); background: rgba(178, 58, 46, 0.08); }
   .pill.unknown { color: var(--muted); }
-  .pill.empty { color: var(--muted); border-color: var(--line-soft); background: transparent; }
+  .pill.est { border-color: rgba(120,132,150,.45); color: var(--dsw-alias-text-tertiary, #8b93a3); }
+      .pill.empty { color: var(--muted); border-color: var(--line-soft); background: transparent; }
 
   .session .figures {
     font-size: 12px;
@@ -2111,18 +2112,6 @@
         </div>
         <div class="row">
           <div class="label">
-            <span class="tip" data-tip="摘要最多多少字，超出会被截断；默认 500。">摘要字数上限</span>
-            <span class="desc">摘要模板里的 {max_chars}</span>
-          </div>
-          <div class="control">
-            <input type="number" id="carry-chars" min="100" max="2000" step="50" value="500" data-min="100" data-max="2000" />
-            <span class="value">字</span>
-            <em class="field-err" id="err-chars"></em>
-          </div>
-        </div>
-        <p class="micro">摘要超过这个字数会被截断；开启增强摘要模式后同样遵守该上限。</p>
-        <div class="row">
-          <div class="label">
             <span class="tip" data-tip="模型没上报窗口上限时用的兜底值；正常情况面板优先读模型真实上限。">兜底上下文上限</span>
             <span class="desc">仅当模型未上报真实窗口时使用</span>
           </div>
@@ -2147,6 +2136,72 @@
           </div>
           <div class="control"><span class="ro" id="ro-log-limit">200 条</span></div>
         </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>选择性剪枝</h2>
+      <p class="hint">不再按轮数整段丢：先把必须原句记住的话摘成「记忆卡」，其余折叠成摘要；最近 N 轮照旧留原文，剪之前整份备份。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="开启后每轮请求前检查一次：轮数或估算 token 越过阈值就剪一次，没越过什么都不做。">启用选择性剪枝</span>
+            <span class="desc">替代核心「按轮数静默丢」</span>
+          </div>
+          <div class="control"><div class="switch" id="sw-prune" role="switch" aria-checked="true" tabindex="0"></div></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="规则判不准的片段交给对话模型打 0–3 分（一次批量请求）。关掉只走规则与长期记忆匹配，省一次调用。">模型复核灰色片段</span>
+            <span class="desc">一次批量打分，通常几百 token</span>
+          </div>
+          <div class="control"><div class="switch" id="sw-prune-model" role="switch" aria-checked="true" tabindex="0"></div></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="会话超过这么多轮就剪一次；建议 20–35 轮之间。">触发轮数</span>
+            <span class="desc">按轮数触发</span>
+          </div>
+          <div class="control">
+            <input type="number" id="prune-rounds" min="8" max="200" step="1" value="26" />
+            <span class="value">轮</span>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="估算 token 超过这个数也剪一次；deepseek 窗口 128k，建议 45000–65000。">触发 Token</span>
+            <span class="desc">按估算占用触发</span>
+          </div>
+          <div class="control">
+            <input type="number" id="prune-tokens" min="8000" max="200000" step="1000" value="55000" />
+            <span class="value">tokens</span>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="剪完保留最近多少轮原样不动；建议 8–12 轮。">保留最近轮数</span>
+            <span class="desc">这部分永远原文</span>
+          </div>
+          <div class="control">
+            <input type="number" id="prune-keep" min="2" max="40" step="1" value="10" />
+            <span class="value">轮</span>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="单次最多丢掉多少比例的片段，超出的自动改走摘要，防止一次剪太狠。">单次最多丢弃</span>
+            <span class="desc">防误伤的保险丝</span>
+          </div>
+          <div class="control">
+            <input type="number" id="prune-drop" min="10" max="90" step="5" value="40" />
+            <span class="value">%</span>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;">
+        <button class="ghost" type="button" id="btn-prune-run">立即剪枝</button>
+        <button class="ghost" type="button" id="btn-prune-restore">回滚上次剪枝</button>
+        <span class="micro" id="prune-last">还没有剪过；到阈值会自动跑一次。</span>
       </div>
     </div>
 
@@ -2509,13 +2564,13 @@
       .dy-pc-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     </style>
     <div class="card">
-      <h2>抖音 PC 客户端</h2>
-      <p class="hint">在你自己的抖音客户端里操作：看窗口、截一张画面、在窗口内滑一个视频。只动抖音窗口，不点别的窗口，也不点赞、评论、关注、私信。</p>
+      <h2>抖音网页版</h2>
+      <p class="hint">用 Playwright 打开抖音网页，扫码登录一次就够了（cookie 留在本地）。私信走 AstrBot 常规管线：人设、指令、权限、记忆、日记都跟 QQ 一样，回复只回到抖音，不会串到 QQ。</p>
       <div class="rows">
         <div class="row">
           <div class="label">
-            <span class="tip" data-tip="关掉后所有 /抖音 指令与这里的按钮都会被拒绝。">允许操作抖音</span>
-            <span class="desc" id="dy-pc-tip">正在读取窗口…</span>
+            <span class="tip" data-tip="关掉后不轮询私信、不动作，所有 /抖音 与 /douyin_* 指令都会被拒绝。">抖音网页总开关</span>
+            <span class="desc" id="dy-web-tip">正在读取状态…</span>
           </div>
           <div class="control">
             <div class="switch" id="sw-dy-enabled" role="switch" aria-checked="false" tabindex="0"></div>
@@ -2523,39 +2578,116 @@
         </div>
         <div class="row">
           <div class="label">
-            <span class="tip" data-tip="把抖音客户端叫到前台；被最小化时会先还原它。">窗口状态</span>
-            <span class="desc" id="dy-pc-state">—</span>
+            <span class="tip" data-tip="无头运行更安静；要扫码登录时会自动换成有头窗口。">无头浏览器</span>
+            <span class="desc">建议开；登录时可临时关掉看画面</span>
+          </div>
+          <div class="control">
+            <div class="switch" id="sw-dy-headless" role="switch" aria-checked="true" tabindex="0"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="私信轮询间隔，代码层最低锁 5 秒，防止高频轮询丢 cookie。">私信轮询间隔</span>
+            <span class="desc">秒，最低 5</span>
+          </div>
+          <div class="control"><input type="number" id="dy-poll" min="5" max="3600" step="1" /></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="只有白名单里的抖音用户能吃高权限指令；与 QQ 管理员互不影响。填 openid，多个用逗号分隔。">抖音管理员 openid</span>
+            <span class="desc" id="dy-admins-desc">留空表示抖音端没人能用高危指令</span>
+          </div>
+          <div class="control"><input type="text" id="dy-admins" maxlength="600" placeholder="openid1, openid2" /></div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span class="tip" data-tip="首次使用点它，会弹一个有头窗口让你扫码。">登录 / 浏览器状态</span>
+            <span class="desc" id="dy-web-state">—</span>
           </div>
           <div class="control">
             <div class="dy-pc-actions">
-              <button class="btn" id="btn-dy-open" type="button">打开抖音</button>
-              <button class="btn" id="btn-dy-next" type="button">下一个</button>
-              <button class="btn" id="btn-dy-shot" type="button">截一张</button>
+              <button class="btn" id="btn-dy-login" type="button">扫码登录</button>
+              <button class="btn" id="btn-dy-logout" type="button">关闭浏览器</button>
             </div>
           </div>
         </div>
         <div class="row">
           <div class="label">
-            <span class="tip" data-tip="一次最多看几个视频、多久，到点自己停；不会后台循环。">立即看一会儿</span>
-            <span class="desc" id="dy-today">—</span>
+            <span class="tip" data-tip="只读检查：Playwright、浏览器、登录、公共风控；不会自己启动浏览器。">自检</span>
+            <span class="desc">只看不改，刷新页面即重查</span>
           </div>
+          <div class="control"><span class="ro" id="dy-check-state">—</span></div>
+        </div>
+      </div>
+      <p class="hint" id="dy-check-detail">—</p>
+    </div>
+
+    <div class="card">
+      <h2>自定义行为风控</h2>
+      <p class="hint">这些数字直接写进公共风控池，刷视频、点赞、评论、私信全走它。没有内置封顶，全凭你定；只锁死「私信轮询 ≥ 5 秒」这一条底线。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="每分钟最多切换几个视频，0 表示不限。">每分钟切视频</span><span class="desc">个 / 分钟</span></div>
+          <div class="control"><input type="number" id="risk-video" min="0" max="600" step="1" /></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="每分钟最多点赞几次。">每分钟点赞</span><span class="desc">次 / 分钟</span></div>
+          <div class="control"><input type="number" id="risk-like" min="0" max="600" step="1" /></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="每分钟最多评论几次。">每分钟评论</span><span class="desc">次 / 分钟</span></div>
+          <div class="control"><input type="number" id="risk-comment" min="0" max="600" step="1" /></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="单个抖音用户一分钟最多回几条私信。">私信回复上限</span><span class="desc">条 / 分钟</span></div>
+          <div class="control"><input type="number" id="risk-dm" min="0" max="600" step="1" /></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="每个动作之间的随机延时，太小容易被识别为脚本。">动作随机延时</span><span class="desc">秒，最小 ~ 最大</span></div>
           <div class="control">
-            <button class="btn" id="btn-dy-run" type="button">看一会儿</button>
+            <input type="number" id="risk-dmin" min="0" max="120" step="0.1" />
+            <span class="value">至</span>
+            <input type="number" id="risk-dmax" min="0" max="300" step="0.1" />
+            <span class="value">秒</span>
           </div>
         </div>
         <div class="row">
-          <div class="label">
-            <span class="tip" data-tip="每次看完把标题汇总成一条 QQ 消息发给管理员。">结束通知</span>
-            <span class="desc">看完后把标题汇总成一条发到管理员 QQ</span>
-          </div>
-          <div class="control">
-            <div class="switch" id="sw-dy-notify" role="switch" aria-checked="true" tabindex="0"></div>
-          </div>
+          <div class="label"><span class="tip" data-tip="撞到配额后停多久再放行。">触限冷却</span><span class="desc">秒</span></div>
+          <div class="control"><input type="number" id="risk-cool" min="0" max="86400" step="10" /></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="一次会话最多做多少个动作，0 表示不限。">单次会话动作上限</span><span class="desc">0 = 不限</span></div>
+          <div class="control"><input type="number" id="risk-session" min="0" max="100000" step="1" /></div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="保存后立即生效；公共风控给 QQ 与抖音分开计数，互不影响。">保存</span><span class="desc" id="risk-active">—</span></div>
+          <div class="control"><button class="btn" id="btn-risk-save" type="button">保存风控参数</button></div>
         </div>
       </div>
-      <div class="dy-shot-wrap" id="dy-shot-wrap" hidden>
-        <img id="dy-shot-img" alt="抖音画面截图" src="" />
-        <div class="dy-shot-meta" id="dy-shot-meta"></div>
+      <p class="hint">所有行为参数由你自主把控，参数过高会提升抖音封号风险，请谨慎配置。</p>
+    </div>
+
+    <div class="card">
+      <h2>手动动作（管理员）</h2>
+      <p class="hint">QQ 里用 /douyin_like、/douyin_comment、/douyin_share 也行；这里点按同样先过风控。</p>
+      <div class="rows">
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="在抖音窗口里往下滑一个视频，并记下标题。">下一个视频</span><span class="desc" id="dy-action-out">—</span></div>
+          <div class="control">
+            <div class="dy-pc-actions">
+              <button class="btn" id="btn-dy-next" type="button">下一个</button>
+              <button class="btn" id="btn-dy-like" type="button">点赞</button>
+              <button class="btn" id="btn-dy-share" type="button">分享到私信</button>
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label"><span class="tip" data-tip="对当前视频发一条评论，同样先过风控。">评论当前视频</span><span class="desc">内容会原样发出去</span></div>
+          <div class="control">
+            <input type="text" id="dy-comment-text" maxlength="120" placeholder="这鱼看着挺香" />
+            <button class="btn" id="btn-dy-comment" type="button">发评论</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2749,9 +2881,9 @@
         </div>
         <div class="row">
           <div class="label">
-            <span class="tip" data-tip="格式如 napcat:FriendMessage:1703346440。">接收会话</span>
+            <span class="tip" data-tip="格式如 napcat:FriendMessage:10001。">接收会话</span>
           </div>
-          <div class="control"><input type="text" id="ag-umo" class="input" placeholder="napcat:FriendMessage:..." /></div>
+          <div class="control"><input type="text" id="ag-umo" class="input" placeholder="snowluma:FriendMessage:..." /></div>
         </div>
         <div class="row">
           <div class="label"><span class="tip" data-tip="输入 / 输出 / 缓存读。">Token 统计</span></div>
@@ -2920,7 +3052,7 @@
 
   <div class="footnote">
     <span>数据来自 AstrBot 官方会话与 Provider 配置 · 不估算、不联网</span>
-    <span id="foot-version">PLUTO panel v1.16.2</span>
+    <span id="foot-version">PLUTO panel v1.18.1</span>
   </div>
   </div><!-- /.main -->
 
@@ -3224,19 +3356,25 @@
 
     function row(s) {
       var st = statusOf(s.percent);
-      var pct = s.percent === null || s.percent === undefined ? 0 : Math.min(100, Math.max(0, s.percent));
+      // v1.17.4：有真实用量就用真实的；还没有（比如刚剪枝过、这轮没发消息）就用整包预估顶上，并标「估」。
+      var usedShown = s.used || s.predicted || 0;
+      var isEst = !s.used && !!s.predicted;
+      var pct = isEst && s.limit
+        ? Math.min(100, Math.max(0, usedShown / s.limit * 100))
+        : (s.percent === null || s.percent === undefined ? 0 : Math.min(100, Math.max(0, s.percent)));
+      var mark = isEst ? '<span class="pill est" title="本地估算：系统提示 + 上下文 + 工具；下一轮对话后会换成真实用量">估</span>' : '';
       var figures;
       if (s.limit) {
-        figures = "<b>" + fmt(s.used) + "</b> / " + fmt(s.limit) + " Token";
+        figures = "<b>" + fmt(usedShown) + "</b>" + mark + " / " + fmt(s.limit) + " Token";
       } else {
-        figures = "<b>" + fmt(s.used) + "</b> Token";
+        figures = "<b>" + fmt(usedShown) + "</b>" + mark + " Token";
       }
       var sub;
       if (s.limit) {
-        sub = (s.percent === null ? "—" : s.percent.toFixed(1) + "%") +
-          " · 剩余 " + fmt(s.remaining) + " · " + (s.model || "未知模型") +
+        sub = (isEst ? "≈" : "") + pct.toFixed(1) + "%" +
+          " · 剩余 " + fmt(Math.max(0, s.limit - usedShown)) + " · " + (s.model || "未知模型") +
           (s.limit_source === "fallback" ? " · 上限为 AstrBot 兜底值，建议手动确认" : "") +
-          (s.updated_at ? " · " + s.updated_at : "");
+          (isEst ? " · 本轮预估" : (s.updated_at ? " · " + s.updated_at : ""));
       } else {
         sub = "该模型未设置窗口上限，无法计算占比" + (s.model ? " · " + s.model : "");
       }
@@ -3247,7 +3385,8 @@
             '<div class="who">' +
               '<span class="name" title="' + escapeAttr(s.web ? (s.note || s.display || s.umo) : s.umo) + '">' + escapeHtml(displayName(s)) + '</span>' +
               '<span class="pill ' + st.level + '">' + st.label + '</span>' +
-              (s.used === 0 ? '<span class="pill empty">空会话</span>' : '') +
+              (s.used === 0 && !s.predicted && !s.msg_count ? '<span class="pill empty">空会话</span>' : '') +
+              (s.used === 0 && s.msg_count && !s.predicted ? '<span class="pill" title="这条会话有历史，等下一轮对话后用量会自己更新">用量待刷新</span>' : '') +
               (s.parent_cid
                 ? '<button type="button" class="tag-carry" data-act="goto" data-target="' +
                   escapeAttr(s.parent_cid) + '" title="点击跳转到父会话">📌承接自:' +
@@ -3730,8 +3869,6 @@
     if (th && c.auto_threshold !== undefined) th.value = String(Math.round(Number(c.auto_threshold) * 100));
     var keep = $("carry-keep");
     if (keep && c.keep_rounds !== undefined) keep.value = String(c.keep_rounds);
-    var chars = $("carry-chars");
-    if (chars && c.summary_max_chars !== undefined) chars.value = String(c.summary_max_chars);
     var limit = $("carry-limit");
     if (limit && c.token_limit !== undefined) limit.value = String(c.token_limit);
     // 只读展示项（后端常量，前端不参与修改）
@@ -3751,6 +3888,7 @@
     try {
       var data = await apiGet("carry");
       applyCarry((data && data.carry) || {});
+      loadPrune();
     } catch (err) {
       toast("读取压缩设置失败：" + ((err && err.message) || err));
     }
@@ -3764,6 +3902,126 @@
     } catch (err) {
       toast("保存失败：" + ((err && err.message) || err));
     }
+  }
+
+  /* ---------------- 选择性剪枝（v1.17.0） ---------------- */
+  var pruneState = { cfg: null };
+
+  function setSw(id, on) {
+    var el = $(id);
+    if (el) el.setAttribute("aria-checked", on ? "true" : "false");
+  }
+
+  function applyPrune(d) {
+    if (!d) return;
+    pruneState.cfg = d.cfg || {};
+    var c = pruneState.cfg;
+    setSw("sw-prune", c.enabled !== false);
+    setSw("sw-prune-model", c.model_scoring !== false);
+    [["prune-rounds", c.trigger_rounds], ["prune-tokens", c.trigger_tokens],
+     ["prune-keep", c.keep_recent],
+     ["prune-drop", Math.round(Number(c.max_drop_ratio || 0.4) * 100)]
+    ].forEach(function (p) {
+      var el = $(p[0]);
+      if (el && p[1] !== undefined && p[1] !== null) el.value = String(p[1]);
+    });
+    var lastEl = $("prune-last");
+    if (lastEl) {
+      var it = d.last || {};
+      lastEl.textContent = it.time
+        ? (it.time + " · " + fmt(it.before) + " → " + fmt(it.after) + " tokens · 原句 " +
+           (it.keep_fragments || it.keep || 0) + " 段")
+        : "还没有剪过；到阈值会自动跑一次。";
+    }
+  }
+
+  async function loadPrune() {
+    try {
+      applyPrune(await apiGet("prune-info"));
+    } catch (err) {
+      toast("读取剪枝设置失败：" + ((err && err.message) || err));
+    }
+  }
+
+  async function savePrune(patch) {
+    try {
+      var d = await apiPost("prune-save", patch);
+      applyPrune(d);
+      toast("剪枝设置已保存");
+    } catch (err) {
+      toast("保存失败：" + ((err && err.message) || err));
+    }
+  }
+
+  async function restorePrune() {
+    var btn = $("btn-prune-restore");
+    if (btn) { btn.disabled = true; btn.textContent = "回滚中…"; }
+    try {
+      var d = await apiPost("prune-restore", {});
+      toast("已回滚：" + (d.restored || "备份") + "（" + fmt(d.messages) + " 条）");
+      loadPrune();
+    } catch (err) {
+      toast("回滚失败：" + ((err && err.message) || err));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "回滚上次剪枝"; }
+    }
+  }
+
+  async function runPrune() {
+    var btn = $("btn-prune-run");
+    if (btn) { btn.disabled = true; btn.textContent = "剪枝中…"; }
+    try {
+      var d = await apiPost("prune-run", {});
+      var info = (d && d.info) || {};
+      if (d && d.skipped) {
+        toast((info && info.skipped) || "这次没有收益，先不动");
+        return;
+      }
+      toast("剪枝完成：" + fmt(info.before) + " → " + fmt(info.after) + " tokens");
+      applyPrune(await apiGet("prune-info"));
+    } catch (err) {
+      toast("剪枝失败：" + ((err && err.message) || err));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "立即剪枝"; }
+    }
+  }
+
+  function bindPrune() {
+    [["sw-prune", "enabled"], ["sw-prune-model", "model_scoring"]].forEach(function (p) {
+      var el = $(p[0]);
+      if (!el) return;
+      function toggle() {
+        var next = el.getAttribute("aria-checked") !== "true";
+        el.setAttribute("aria-checked", next ? "true" : "false");
+        var patch = {}; patch[p[1]] = next; savePrune(patch);
+      }
+      el.addEventListener("click", toggle);
+      el.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+      });
+    });
+    [
+      { id: "prune-rounds", key: "trigger_rounds", min: 8, max: 200 },
+      { id: "prune-tokens", key: "trigger_tokens", min: 8000, max: 200000 },
+      { id: "prune-keep", key: "keep_recent", min: 2, max: 40 },
+      { id: "prune-drop", key: "max_drop_ratio", min: 10, max: 90, scale: 0.01 }
+    ].forEach(function (f) {
+      var el = $(f.id);
+      if (!el) return;
+      el.addEventListener("change", function () {
+        var v = Number(el.value);
+        if (!isFinite(v) || v < f.min || v > f.max) {
+          toast("超出范围（" + f.min + "–" + f.max + "）");
+          applyPrune({ cfg: pruneState.cfg || {} });
+          return;
+        }
+        var patch = {}; patch[f.key] = f.scale ? v * f.scale : v; savePrune(patch);
+      });
+    });
+    var run = $("btn-prune-run");
+    if (run) run.addEventListener("click", runPrune);
+    var back = $("btn-prune-restore");
+    if (back) back.addEventListener("click", restorePrune);
   }
 
   var LOG_FILTERS = { all: "全部", compress: "手动压缩", continue: "手动承接", auto: "请求内自动压缩" };
@@ -4506,11 +4764,12 @@
       });
     }
 
+    bindPrune();
+
     // 数值字段：前端范围校验，非法输入不保存并回显上一次有效值
     var fields = [
       { id: "carry-threshold", key: "auto_threshold", min: 30, max: 95, err: "err-threshold", scale: 0.01 },
       { id: "carry-keep", key: "keep_rounds", min: 1, max: 50, err: "err-keep" },
-      { id: "carry-chars", key: "summary_max_chars", min: 100, max: 2000, err: "err-chars" },
       { id: "carry-limit", key: "token_limit", min: 1000, max: 10000000, err: "err-limit" }
     ];
     fields.forEach(function (f) {
@@ -4928,7 +5187,7 @@
     try {
       var data = await apiGet("dy-overview");
       applyDy(data || {});
-      dyPcRefresh();
+      dyRefresh();
     } catch (err) {
       toast("读取抖音状态失败：" + ((err && err.message) || err));
     }
@@ -4960,82 +5219,123 @@
     }
   }
 
-  var dyPcLast = null;
+  var dyWebLast = null;
 
-  function dyPcText(st, enabled) {
-    if (!st) return "还没读到窗口状态";
-    if (!st.found) return "没找到抖音窗口（客户端没开，或进程名不是 douyin.exe）";
-    if (st.elevated) return "抖音是管理员权限开的，我没权限操作它";
-    if (st.minimized) return "窗口被最小化了，看不到画面";
-    if (!st.visible) return "窗口现在不可见";
-    if (st.covered >= 0.35) return "有 " + Math.round(st.covered * 100) + "% 被别的窗口挡着";
-    return "窗口在，" + st.rect[2] + "×" + st.rect[3] + "，看得清";
+  function dyWebText(d) {
+    var st = (d && d.state) || {};
+    if (!st.running) return "浏览器没开";
+    var bits = [st.logged_in ? "已登录" : "未登录"];
+    if (st.url) bits.push(st.url);
+    return bits.join(" · ");
   }
 
-  function dyPcApply(data) {
-    var d = data || {};
-    var st = d.state || null;
-    dyPcLast = st;
-    var tip = $("dy-pc-tip");
-    if (tip) {
-      tip.textContent = d.enabled === false
-        ? "关着：所有抖音操作都会被拒绝"
-        : (st && st.usable ? "开着，随时可以动手" : "开着，但窗口现在不能操作");
+  function dyApply(d) {
+    var data = d || {};
+    var st = data.state || {};
+    dyWebLast = st;
+    var tip = $("dy-web-tip");
+    if (tip) tip.textContent = st.running
+      ? (st.logged_in ? "开着，可以干活" : "浏览器开着，但还没登录")
+      : "关着：不会轮询私信，也不动手";
+    var sEl = $("dy-web-state");
+    if (sEl) sEl.textContent = dyWebText(data);
+    var r = (data.risk && data.risk.cfg) || {};
+    if ($("risk-video")) $("risk-video").value = r.video_per_min != null ? r.video_per_min : 20;
+    if ($("risk-like")) $("risk-like").value = r.like_per_min != null ? r.like_per_min : 10;
+    if ($("risk-comment")) $("risk-comment").value = r.comment_per_min != null ? r.comment_per_min : 4;
+    if ($("risk-dm")) $("risk-dm").value = r.dm_per_min != null ? r.dm_per_min : 6;
+    if ($("risk-dmin")) $("risk-dmin").value = r.delay_min != null ? r.delay_min : 1.5;
+    if ($("risk-dmax")) $("risk-dmax").value = r.delay_max != null ? r.delay_max : 4.5;
+    if ($("risk-cool")) $("risk-cool").value = r.cooldown_seconds != null ? r.cooldown_seconds : 90;
+    if ($("risk-session")) $("risk-session").value = r.actions_per_session != null ? r.actions_per_session : 0;
+    var active = (data.risk && data.risk.active) || [];
+    var act = $("risk-active");
+    if (act) {
+      act.textContent = active.length
+        ? active.map(function (a) { return a.platform + "/" + String(a.uid).slice(0, 8) + " 视频" + a.video + " 赞" + a.like; }).join("；")
+        : "当前没有计数中的动作";
     }
-    var sEl = $("dy-pc-state");
-    if (sEl) sEl.textContent = dyPcText(st, d.enabled !== false);
-    var ok = !!(st && st.usable) && d.enabled !== false;
-    ["btn-dy-next", "btn-dy-shot", "btn-dy-run"].forEach(function (id) {
+    var cfg = data.settings || {};
+    function setSw(id, on) {
       var el = $(id);
-      if (el) { el.disabled = !ok; el.title = ok ? "" : "现在不能操作抖音"; }
+      if (el) el.setAttribute("aria-checked", on ? "true" : "false");
+    }
+    setSw("sw-dy-enabled", cfg.enabled === true);
+    setSw("sw-dy-headless", cfg.headless !== false);
+    if ($("dy-poll")) $("dy-poll").value = cfg.poll_seconds != null ? cfg.poll_seconds : 8;
+    var admins = (data.admin_openids || []).join(", ");
+    if ($("dy-admins")) $("dy-admins").value = admins;
+    if ($("dy-admins-desc")) $("dy-admins-desc").textContent = admins ? "已配 " + (data.admin_openids || []).length + " 个" : "留空表示抖音端没人能用高危指令";
+    ["btn-dy-next", "btn-dy-like", "btn-dy-share", "btn-dy-comment"].forEach(function (id) {
+      var el = $(id);
+      if (el) el.disabled = !(st.running && st.logged_in);
     });
   }
 
-  async function dyPcRefresh() {
+  async function dyRefresh() {
     try {
-      var data = await apiGet("dy-pc-state");
-      dyPcApply(data || {});
+      var data = await apiGet("dy-web-status");
+      dyApply(data || {});
     } catch (err) {
-      toast("读取窗口状态失败：" + ((err && err.message) || err));
+      toast("读取抖音网页状态失败：" + ((err && err.message) || err));
     }
-  }
-
-  function dyPcShotShow(data) {
-    var wrap = $("dy-shot-wrap");
-    var img = $("dy-shot-img");
-    var meta = $("dy-shot-meta");
-    if (!wrap || !img || !meta) return;
-    if (!data || !data.ok) {
-      wrap.hidden = true;
-      return;
-    }
-    img.src = data.thumb || "";
-    var kindMap = { video: "视频流", login: "登录页", risk: "安全验证", unknown: "没认出来是什么界面" };
-    var parts = [];
-    if (data.image_path) parts.push("文件：" + data.image_path);
-    parts.push("界面：" + (kindMap[data.kind] || data.kind || "未知"));
-    if (data.title) parts.push("识别到标题：「" + data.title + "」");
-    meta.textContent = parts.join(" · ");
-    wrap.hidden = false;
-  }
-
-  async function dyPcAction(path, label) {
     try {
-      var res = await apiPost(path, {});
-      var data = res || {};
-      if (data.ok === false) {
-        toast(label + "没成功：" + (data.error || data.message || "未知原因"));
-        dyPcShotShow(null);
-      } else if (path === "dy-pc-shot") {
-        dyPcShotShow(data);
-        toast("截好了");
-      } else {
+      var chk = await apiGet("dy-check");
+      var items = (chk && chk.items) || [];
+      var bad = items.filter(function (x) { return x.state !== "正常"; });
+      var el = $("dy-check-state");
+      if (el) el.textContent = items.length ? (bad.length ? bad.length + " 项待处理" : "全部正常") : "—";
+      var detail = $("dy-check-detail");
+      if (detail) detail.textContent = items.map(function (x) { return x.name + "：" + x.detail; }).join("；") || "—";
+    } catch (err) { /* 自检失败不打断主流程 */ }
+  }
+
+  async function dyAct(path, label, body) {
+    var out = $("dy-action-out");
+    if (out) out.textContent = "正在" + label + "…";
+    try {
+      var data = (await apiPost(path, body || {})) || {};
+      if (data.ok) {
+        var t = data.title ? "《" + String(data.title).slice(0, 30) + "》" : "";
+        if (out) out.textContent = label + "好了 " + t;
         toast(label + "好了");
+      } else {
+        if (out) out.textContent = label + "没成功：" + (data.message || "原因不明");
+        toast(label + "没成功：" + (data.message || "原因不明"));
       }
-      await dyPcRefresh();
-      await loadDy();
+      await dyRefresh();
     } catch (err) {
+      if (out) out.textContent = label + "失败：" + ((err && err.message) || err);
       toast(label + "失败：" + ((err && err.message) || err));
+    }
+  }
+
+  async function saveDyWeb(patch) {
+    try {
+      await apiPost("dy-settings", patch);
+      await dyRefresh();
+    } catch (err) {
+      toast("保存失败：" + ((err && err.message) || err));
+    }
+  }
+
+  async function saveRisk() {
+    var body = {
+      video_per_min: Number(($("risk-video") || {}).value || 0),
+      like_per_min: Number(($("risk-like") || {}).value || 0),
+      comment_per_min: Number(($("risk-comment") || {}).value || 0),
+      dm_per_min: Number(($("risk-dm") || {}).value || 0),
+      delay_min: Number(($("risk-dmin") || {}).value || 0),
+      delay_max: Number(($("risk-dmax") || {}).value || 0),
+      cooldown_seconds: Number(($("risk-cool") || {}).value || 0),
+      actions_per_session: Number(($("risk-session") || {}).value || 0)
+    };
+    try {
+      await apiPost("dy-risk", body);
+      toast("风控参数已保存");
+      await dyRefresh();
+    } catch (err) {
+      toast("保存风控失败：" + ((err && err.message) || err));
     }
   }
 
@@ -5045,29 +5345,51 @@
       if (!el) return;
       el.addEventListener("change", saveDy);
     });
-    ["sw-dy-enabled", "sw-dy-notify"].forEach(function (id) {
+    ["sw-dy-enabled", "sw-dy-notify", "sw-dy-headless"].forEach(function (id) {
       var el = $(id);
       if (!el) return;
       function toggle() {
         var next = el.getAttribute("aria-checked") !== "true";
         el.setAttribute("aria-checked", next ? "true" : "false");
-        saveDy();
+        if (id === "sw-dy-headless") saveDyWeb({ headless: next });
+        else saveDy();
       }
       el.addEventListener("click", toggle);
       el.addEventListener("keydown", function (e) {
         if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); }
       });
     });
+    var poll = $("dy-poll");
+    if (poll) poll.addEventListener("change", function () {
+      saveDyWeb({ poll_seconds: Math.max(5, Number(poll.value || 5)) });
+    });
+    var admins = $("dy-admins");
+    if (admins) admins.addEventListener("change", function () {
+      saveDyWeb({ admin_openids: admins.value });
+    });
     var run = $("btn-dy-run");
     if (run) run.addEventListener("click", function () { spinWhile(run, runDy()); });
     var refresh = $("btn-dy-refresh");
     if (refresh) refresh.addEventListener("click", function () { spinWhile(refresh, loadDy()); });
-    var pcOpen = $("btn-dy-open");
-    if (pcOpen) pcOpen.addEventListener("click", function () { spinWhile(pcOpen, dyPcAction("dy-pc-open", "打开")); });
-    var pcNext = $("btn-dy-next");
-    if (pcNext) pcNext.addEventListener("click", function () { spinWhile(pcNext, dyPcAction("dy-pc-next", "翻页")); });
-    var pcShot = $("btn-dy-shot");
-    if (pcShot) pcShot.addEventListener("click", function () { spinWhile(pcShot, dyPcAction("dy-pc-shot", "截图")); });
+    var login = $("btn-dy-login");
+    if (login) login.addEventListener("click", function () { spinWhile(login, dyAct("dy-web-login", "登录")); });
+    var logout = $("btn-dy-logout");
+    if (logout) logout.addEventListener("click", function () { spinWhile(logout, dyAct("dy-web-logout", "关闭浏览器")); });
+    var nxt = $("btn-dy-next");
+    if (nxt) nxt.addEventListener("click", function () { spinWhile(nxt, dyAct("dy-next", "切换")); });
+    var lk = $("btn-dy-like");
+    if (lk) lk.addEventListener("click", function () { spinWhile(lk, dyAct("dy-like", "点赞")); });
+    var sh = $("btn-dy-share");
+    if (sh) sh.addEventListener("click", function () { spinWhile(sh, dyAct("dy-share", "分享")); });
+    var cm = $("btn-dy-comment");
+    if (cm) cm.addEventListener("click", function () {
+      var box = $("dy-comment-text");
+      var text = box ? box.value.trim() : "";
+      if (!text) { toast("先写一句评论内容"); return; }
+      spinWhile(cm, dyAct("dy-comment", "评论", { text: text }));
+    });
+    var rs = $("btn-risk-save");
+    if (rs) rs.addEventListener("click", function () { spinWhile(rs, saveRisk()); });
     var sel = $("dy-session");
     if (sel) sel.addEventListener("change", function () {
       dySessionId = sel.value;
@@ -5169,15 +5491,13 @@
      两条路径都是「位移 14px + 渐显」，观感一致，离线也不会卡住面板。 */
   var diaryState = { umo: "", cid: "", label: "", lastCount: -1, loaded: false, settings: {} };
 
+  /* v1.16.3：GSAP 3.12.5 已整段内联在本页末尾，不再向任何 CDN 取脚本（离线可用、无外部依赖）。
+     这里只留一个「等它就绪」的兜底：万一内联脚本不可用，diaryTween 会自动退回 WAAPI。 */
   function loadGsap() {
     if (window.gsap) return;
-    try {
-      var s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js";
-      s.async = true;
-      s.onerror = function () { /* 拿不到就静默退回 WAAPI */ };
-      document.head.appendChild(s);
-    } catch (e) {}
+    window.addEventListener("load", function () {
+      if (!window.gsap && window.console) console.debug("[panel] GSAP 未就绪，动效回退 WAAPI");
+    });
   }
 
   function diaryTween(el, opts) {

@@ -123,7 +123,25 @@ def _parse_hhmm(value: str) -> tuple[int, int] | None:
     return None
 
 
-def _in_windows(now: datetime, windows: Any) -> bool:
+_CLICHE_PATTERNS = (
+    r"今天也要",
+    r"照顾好自己",
+    r"记得.{0,4}(休息|早点睡|早睡|喝水|吃饭|别熬夜)",
+    r"早点(睡|休息)",
+    r"(在忙吗|在干嘛|干什么呢|在想什么|有什么想说的|有什么想跟我说的)",
+    r"今天过得怎么样?",
+    r"(元气满满|加油哦|冲鸭|宝子)",
+    r"(注意身体|多穿点|别着凉)",
+)
+
+
+def _bigrams(text: str) -> set[str]:
+    """字符二元组，用来判断两句话是不是在重复同一件事/同一句式。"""
+    clean = re.sub(r"[\s，。！？、,.!?~…「」“”\"']", "", text or "")
+    return {clean[i:i + 2] for i in range(max(0, len(clean) - 1))}
+
+
+def _in_windows(now: datetime, windows) -> bool:
     """now 是否落在 windows（[[\"23:00\",\"07:00\"], …]）内，支持跨零点。"""
     if not isinstance(windows, list):
         return False
@@ -421,6 +439,19 @@ class ProactiveEngine:
     # ------------------------------------------------------------------ #
     # 素材
     # ------------------------------------------------------------------ #
+    def _recent_sent_texts(self, umo: str, limit: int = 6) -> list[str]:
+        """最近几条主动消息原文：既给写作用（别重复），也给审稿用（像不像复读）。"""
+        try:
+            with self._conn() as conn:
+                cur = conn.execute(
+                    "SELECT content FROM proactive_log WHERE umo=? ORDER BY id DESC LIMIT ?",
+                    (umo, int(limit)),
+                )
+                return [str(r["content"] or "") for r in cur.fetchall() if str(r["content"] or "").strip()]
+        except Exception as exc:
+            logger.debug(f"[token_panel] 读最近主动消息失败: {exc}")
+            return []
+
     def _recent_contents(self, umo: str, limit: int = 6) -> list[str]:
         """最近几条已发内容，用于过滤重复素材（素材源是固定的最近记录，
         不去重的话同一件事会被反复拿出来说）。"""
@@ -536,7 +567,10 @@ class ProactiveEngine:
         return "；".join(titles[:6])
 
     def _search_material(self, umo: str = "") -> str:
-        path = self.plugin.NET_LOG_DB
+        try:
+            path = self.plugin._net_db_path()
+        except Exception:
+            return ""
         try:
             conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             try:
@@ -557,12 +591,132 @@ class ProactiveEngine:
         return "；".join(picked[:8])
 
     def _material(self, source: str, umo: str = "") -> str:
+        """素材 = 外部素材（抖音/搜索）+ 自己的真实近况（小屋/日记/更早的旧事）。
+
+        以前只给外部素材，模型没东西可提，就只会接着上一句说，
+        主动消息因此永远黏在最近一轮对话上。
+        """
         self._last_topics = []
+        base = ""
         if source == "douyin":
-            return self._douyin_material(umo)
-        if source == "search":
-            return self._search_material(umo)
+            base = self._douyin_material(umo)
+        elif source == "search":
+            base = self._search_material(umo)
+        parts = [base] if base else []
+        try:
+            seeds = self._topic_seeds(umo)
+        except Exception as exc:
+            logger.debug(f"[token_panel] 组装自己的近况失败: {exc}")
+            seeds = ""
+        if seeds:
+            parts.append(seeds)
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------ #
+    # 主动性来源：小屋状态 / 自己的日记 / 更早的旧事
+    # ------------------------------------------------------------------ #
+    def _house_seed(self) -> str:
+        """小屋里此刻的真实状态（位置与最近一条行为日志）。"""
+        iso = getattr(self.plugin, "isohouse", None)
+        if iso is None:
+            return ""
+        try:
+            cfg = iso.cfg()
+            if not isinstance(cfg, dict) or cfg.get("enabled") is False:
+                return ""
+            data = iso.overview()
+            state = (data or {}).get("state") or {}
+            logs = (data or {}).get("log") or []
+            tail = ""
+            if logs:
+                last = logs[-1]
+                tail = str(last.get("text") or "") if isinstance(last, dict) else str(last)
+            roam = state.get("roam") or {}
+            roaming = "正自己溜达" if roam.get("enabled") else "没在溜达"
+            if tail:
+                return f"小屋：我在小屋里，刚才「{tail}」（{roaming}）"
+            pos = state.get("pos") or {}
+            if isinstance(pos, dict) and pos.get("x") is not None:
+                return f"小屋：我在小屋里待着，位置大概在 ({pos.get('x')},{pos.get('y')})，{roaming}"
+        except Exception as exc:
+            logger.debug(f"[token_panel] 读取小屋状态失败: {exc}")
         return ""
+
+    def _diary_seed(self, umo: str) -> str:
+        """自己日记里最近写过的一两件事（真实文本，可原样回忆）。"""
+        try:
+            path = self.plugin._diary_path(umo)  # noqa: SLF001 - 同插件内部复用
+            if not path.exists():
+                return ""
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            entries = raw.get("entries") if isinstance(raw, dict) else raw
+            if not isinstance(entries, list) or not entries:
+                return ""
+            picked = []
+            for item in entries[::-1][:2]:
+                text = str((item or {}).get("content") or "").strip()
+                text = re.sub(r"^大肥鱼回[：:]\s*", "", text)
+                text = re.sub(r"\s+", " ", text)
+                if len(text) >= 8:
+                    picked.append(text[:60])
+            if not picked:
+                return ""
+            return "日记里我自己写过：" + " / ".join(picked)
+        except Exception as exc:
+            logger.debug(f"[token_panel] 读取日记失败: {exc}")
+        return ""
+
+    def _older_topic_seed(self, umo: str, skip: int = 12, span: int = 40) -> str:
+        """更早之前主人提过的事（跳过最近几轮，避免又说回当下这茬）。"""
+        db = self._astrbot_db_path()
+        if db is None:
+            return ""
+        try:
+            conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=3)
+            try:
+                row = conn.execute(
+                    "SELECT content FROM conversations WHERE user_id=?"
+                    " ORDER BY updated_at DESC LIMIT 1", (umo,)).fetchone()
+            finally:
+                conn.close()
+            if not row or not row[0]:
+                return ""
+            parsed = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            if not isinstance(parsed, list):
+                return ""
+            older = parsed[-(skip + span):-skip] if len(parsed) > skip else []
+            cands = []
+            for msg in older:
+                if str((msg or {}).get("role")) != "user":
+                    continue
+                line = self._render_dialogue_message(msg)
+                line = re.sub(r"^主人[：:]\s*", "", line).strip()
+                no_ph = re.sub(r"\[[^\]]{0,6}\]", "", line).strip()
+                # 纯图片/语音占位不算话题：去掉占位后至少要有 6 个中文字
+                han = len(re.findall(r"[\u4e00-\u9fa5]", no_ph))
+                if 8 <= len(no_ph) <= 90 and han >= 6:
+                    cands.append(no_ph)
+            if not cands:
+                return ""
+            return "更早之前主人提过：" + random.choice(cands[-12:])
+        except Exception as exc:
+            logger.debug(f"[token_panel] 读取旧话题失败: {exc}")
+        return ""
+
+    def _topic_seeds(self, umo: str) -> str:
+        seeds = []
+        for fn in (
+            lambda: self._house_seed(),
+            lambda: self._diary_seed(umo),
+            lambda: self._older_topic_seed(umo),
+        ):
+            try:
+                item = fn()
+            except Exception:
+                item = ""
+            if item:
+                seeds.append("- " + item)
+        return "\n".join(seeds)
 
     # ------------------------------------------------------------------ #
     # 上下文：让主动消息接得住上一句
@@ -638,7 +792,15 @@ class ProactiveEngine:
         ]
         return "\n".join(lines)
 
-    def _build_compose_prompt(self, material: str, dialogue: str, soft: bool) -> str:
+    def _build_compose_prompt(
+        self,
+        material: str,
+        dialogue: str,
+        soft: bool,
+        mode: str = "",
+        recent: list[str] | None = None,
+        avoid: tuple[str, str] | None = None,
+    ) -> str:
         """拼主动消息的写作指令（纯函数，方便单测）。"""
         now = datetime.now()
         weekday = "一二三四五六日"[now.weekday()]
@@ -649,25 +811,61 @@ class ProactiveEngine:
         ]
         if dialogue:
             rules.append("【最近的真实对话（从旧到新）】\n" + dialogue)
-            rules.append(
-                "上面最后一句是我说的、主人还没回。要接着这个话头说，或者自然岔开，不能装作没发生过。"
-            )
         else:
-            rules.append("【最近对话】没读到记录，那就只说一句轻量的日常话，不要编细节。")
+            rules.append("【最近对话】没读到记录。")
         if material:
-            rules.append(f"【可以顺口提一句的素材】{material}")
+            rules.append("【你此刻能引用的真实事实】\n" + material)
         else:
-            rules.append("【素材】没有。不要假装刚刷到、刚看到什么。")
+            rules.append("【你能引用的事实】没有。")
+        if recent:
+            rules.append(
+                "【你最近主动发过的话（这次不许重复它们的意思和句式）】\n"
+                + "\n".join(f"- {x}" for x in recent[:6])
+            )
+        if avoid:
+            rules.append(
+                "【上一版被驳回】上一版是「"
+                + avoid[0]
+                + "」，问题是："
+                + (avoid[1] or "太像以前说过的")
+                + "。换一件事、换一种说法，别在原句上改。"
+            )
         rules += [
+            (
+                "怎么起头：本轮用「"
+                + {
+                    "continue": "A. 接着最近的话头",
+                    "remember": "B. 想起更早的事或日记里的旧事",
+                    "self": "C. 说说自己此刻的状态",
+                }[mode]
+                + "」这一种——"
+            )
+            if mode in ("continue", "remember", "self")
+            else "怎么起头：三选一，别每次都挑第一种——",
+            "A. 接着最近的话头说一句（最后那句是我说的、主人还没回）；",
+            "B. 忽然想起一件更早的事，或者自己日记里写过的事，顺口提一下；",
+            "C. 说说自己此刻在干什么（小屋里的位置、正发着呆），不带问题也行。",
             "硬性要求：",
-            "1. 只说你确定的事：只允许引用【最近对话】和【素材】里出现过的内容，其余一律不许编。",
-            "2. 不编造自己的动作（“我刚吃了”“我刚刷到”“我看到一个”），素材里没有就是没有。",
-            "3. 不复述素材标题，不出现“素材/搜索/抖音/视频”这些词，不用 # 和 @。",
+            "1. 只说你确定的事：只允许引用【最近的真实对话】和【你此刻能引用的真实事实】里出现过的内容，其余一律不许编。",
+            "2. 不编造自己的动作（“我刚吃了”“我刚刷到”“我看到一个”）；写旧事就说清是“想起/之前”，别当成刚发生。",
+            "3. 不复述素材标题，不出现“素材/搜索/抖音/视频/日记/小屋”这些词，不用 # 和 @。",
             "4. 一句话，最多 40 个字，口语，像随手发的；不要表情、不要列表、不要旁白。",
+            "4.1 必须落到一件具体的小事或一个具体的念头：桌上有什么、外面什么声音、刚才想到谁说的哪句话。"
+            "宁可小到琐碎，也不要写“今天也要开心”“照顾好自己”这种放之四海皆准的空话。",
+            "4.2 允许半句话、允许语气词（啊、诶、啧、嗯…）、允许自言自语；不要排比、不要总结句、不要“其实…”。",
+            "4.3 下面这些是反面例子，出现即算不合格：「今天过得怎么样」「记得早点休息」「在想什么呢」"
+            "「有什么想跟我说的吗」「今天也要元气满满」。",
+            "4.4 正面的样子（学这个语感，不要照抄）：「刚把杯子碰倒了，水顺着桌沿滴到地上，我看着它流完才去擦。」"
+            "「窗外有人在搬东西，一直响，我猜是三楼那家。」「忽然想问你上次那把键盘后来退了没。」",
             "5. 如果此刻真没什么值得说的，就只输出 SKIP 四个字母，别的什么都不要写。",
+            "6. 别问“在干嘛/吃了吗”这种套话；本轮指定了起头方式就按指定的来。",
         ]
         if soft:
-            rules.append("6. 语气柔和克制，别热情过头，一次最多一个问句。")
+            rules.append("7. 语气柔和克制，别热情过头，一次最多一个问句。")
+        rules.append(
+            "8. 发之前自己读一遍：这句话像不像人随口说的？像不像我以前说过的？"
+            "要是只是把最近那句换个字重复，就输出 SKIP。"
+        )
         return "\n".join(rules)
 
     async def _review_message(
@@ -681,11 +879,12 @@ class ProactiveEngine:
             f"【最近对话】\n{dialogue or '（无）'}\n\n"
             f"【素材】{material or '（无）'}\n\n"
             "命中任一条就驳回：\n"
-            "1. 和最近对话完全无关，像自说自话；\n"
-            "2. 编造了上下文里没有的事实（自己刚做了什么、看到什么、主人刚做了什么）；\n"
-            "3. 时间点明显不对（比如下午说“你怎么还不睡”）；\n"
-            "4. 空话套话，或复读上下文里的原句；\n"
-            "5. 语义混乱、指代不清、读起来像病句。\n"
+            "1. 编造了上下文里没有的事实（自己刚做了什么、看到什么、主人刚做了什么）；\n"
+            "2. 把旧事说成刚发生，或时间点明显不对（比如下午说“你怎么还不睡”）；\n"
+            "3. 空话套话、复读上下文原句，或连续追问同一件事；\n"
+            "4. 语义混乱、指代不清、读起来像病句；\n"
+            "5. 明显在替主人编造他没说过的话。\n"
+            "（注意：主动提起更早的旧事或自己此刻的状态是允许的，不要因为“和最近一轮不搭”就驳回。）\n"
             '只输出 JSON：{"verdict":"send"} 或 {"verdict":"drop","why":"不超过15字"}'
         )
         reason = self._precheck_message(text, material, dialogue)
@@ -764,6 +963,21 @@ class ProactiveEngine:
         for act in re.findall(r"我刚(吃了|喝了|看了|刷了|玩了|出门|回来|睡醒)", body):
             if act not in context:
                 return "编造自身动作"
+        # 3.5) 和以前主动发过的太像（字符二元组重合）
+        recent = getattr(self, "_last_recent_sent", []) or []
+        if recent:
+            now_grams = _bigrams(body)
+            for old in recent[:5]:
+                old_grams = _bigrams(old)
+                if not now_grams or not old_grams:
+                    continue
+                overlap = len(now_grams & old_grams) / max(1, len(now_grams | old_grams))
+                if overlap >= 0.34 or body[:6] == old[:6]:
+                    return "和之前说过的太像"
+        # 3.6) 空泛套话黑名单（正则覆盖变体）
+        for pat in _CLICHE_PATTERNS:
+            if re.search(pat, body):
+                return "套话"
         # 4) 原样复读对方上一句
         if dialogue:
             last = ""
@@ -791,8 +1005,14 @@ class ProactiveEngine:
         except Exception:
             return ""
 
-    async def _compose(self, umo: str, source: str, soft: bool) -> str:
-        material = self._material(source, umo)
+    async def _compose(
+        self, umo: str, source: str, soft: bool, avoid: tuple[str, str] | None = None
+    ) -> str:
+        try:
+            material = self._material(source, umo)
+        except Exception as exc:
+            logger.debug(f"[token_panel] 取素材失败，本轮按无素材处理: {exc}")
+            material = ""
         self._last_material = material
         try:
             lines = int(self.settings().get("dialogue_lines") or 10)
@@ -805,7 +1025,14 @@ class ProactiveEngine:
             logger.debug(f"[token_panel] 组装对话上下文失败: {exc}")
         self._last_dialogue = dialogue
         persona = await self._persona_prompt(umo)
-        prompt = self._build_compose_prompt(material, dialogue, soft)
+        # 轮换起头方式：接着话头 / 想起旧事 / 说说自己——让主动消息不只黏在上一轮
+        mode = random.choice(["continue", "remember", "self"])
+        try:
+            recent = self._recent_sent_texts(umo, 6)
+        except Exception:
+            recent = []
+        self._last_recent_sent = recent
+        prompt = self._build_compose_prompt(material, dialogue, soft, mode, recent, avoid)
         try:
             provider = await self.plugin.context.get_using_provider_async(umo=umo)
             if provider is None:
@@ -925,10 +1152,23 @@ class ProactiveEngine:
                     )
                     if not ok:
                         logger.info(
-                            f"[token_panel] 主动消息自检未通过，已丢弃：{text[:40]}"
+                            f"[token_panel] 主动消息自检未通过，按理由重写一次：{text[:40]}"
                             f"（{why or '未说明'}）"
                         )
-                        continue
+                        retry = await self._compose(umo, src, bool(cfg.get("soft_mode", True)),
+                                                    avoid=(text, why or "太像以前说过的"))
+                        if not retry:
+                            continue
+                        ok2, why2 = await self._review_message(
+                            umo, retry, self._last_material, self._last_dialogue
+                        )
+                        if not ok2:
+                            logger.info(
+                                f"[token_panel] 重写仍不合格，本轮不发：{retry[:40]}"
+                                f"（{why2 or '未说明'}）"
+                            )
+                            continue
+                        text = retry
                 if not self._claim_slot(umo, datetime.now(), wait):
                     logger.info(f"[token_panel] 主动消息被其它调度抢占，跳过 {umo}")
                     break

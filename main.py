@@ -47,7 +47,10 @@ from .websearch import LIMITS as WEBSEARCH_LIMITS
 from .websearch import WebSearchModule
 from .isohouse import HOUSE_PROMPT as ISO_PROMPT
 from .isohouse import ISO_DEFAULTS, IsoHouse
-from .douyin_pc import DOUYIN_PROMPT, DouyinPC
+from .douyin_web import DOUYIN_WEB_PROMPT as DOUYIN_PROMPT, DouyinWeb, clean_text as dy_clean
+from .douyin_adapter import PLATFORM_ID as DOUYIN_PLATFORM_ID, DouyinPlatform
+from .risk_core import MIN_POLL_SECONDS, RISK_DEFAULTS, RiskCore
+from .selective import PRUNE_DEFAULTS, SelectivePruner
 from .tts_module import (
     TTS_DEFAULTS,
     TtsService,
@@ -57,7 +60,7 @@ from .tts_module import (
 )
 
 PLUGIN_NAME = "astrbot_plugin_token_panel"
-PLUGIN_VERSION = "1.16.2"
+PLUGIN_VERSION = "1.18.1"
 PAGE_PREFIX = f"/{PLUGIN_NAME}/page"
 
 # 高危线固定 95%（需求写死），预警线可在面板/指令里调整
@@ -100,7 +103,8 @@ CARRY_LIMITS: dict[str, list[int]] = {
 }
 
 SUMMARY_PROMPT = (
-    "请把下面这段较早的聊天记录压缩成一段不超过 {max_chars} 字的中文摘要，供你自己之后回忆。\n"
+    "请把下面这段较早的聊天记录压缩成一段中文摘要，供你自己之后回忆。"
+    "长度按内容需要来：该记的都写进去，别为了省字数丢掉约定、数字和原话；也不要注水把一句话拆成三句。\n"
     "要求：\n"
     "1. 保留：约定与承诺、称呼与关系、主人的偏好与作息、正在做的事及进度、明显的情绪事件、反复出现的梗；\n"
     "2. 丢掉：寒暄、重复表达、与事实无关的语气词；\n"
@@ -111,7 +115,7 @@ SUMMARY_PROMPT = (
 ENHANCED_SUMMARY_EXTRA = (
     "\n4. 另外单独提取对话里出现的关键数据（数字、版本号、价格、日期）、配置项（参数名与取值）、"
     "代码要点（函数名、路径、命令）——只摘录原文出现过的事实，不确定就写「未提及」，严禁编造；\n"
-    "5. 仍用要点式短句，总字数不超过 {max_chars} 字，不要输出表格或代码块。"
+    "5. 仍用要点式短句，不要输出表格或代码块。"
 )
 
 # --------------------------------------------------------------------------- #
@@ -153,7 +157,7 @@ DIARY_WRITE_RULE = (
     "细碎的、没什么用的小事最值得记，一件一件摆出来就好。不要提炼关键词，不要下结论，不要用「今天总结一下」这种腔调。\n"
     "怎么写：第一人称，口语，松弛，允许啰嗦和跑题，句子可长可短，可以有一两个停顿或自我吐槽；"
     "不写 Markdown、不编号、不加标题、不解释日记本，也不在标签之外复述正文。\n"
-    "写多长：至少写到一半，尽量接近上限，不超过 {max_len} 字。宁可多写一件小事，也不要压缩成一句摘要。\n"
+    "写多长：至少写到一半，尽量接近上限，但整篇必须在 {max_len} 字以内写完——宁可少写一件小事，也不要把句子写到一半就被截断，最后一个句号要落满。不要压缩成一句摘要，也别为凑字数硬拖。\n"
     "分时段：一天最多 {max_per_day} 篇。额度够时上午、下午、晚上各写一篇，不够就只写眼下这一篇；各自写各自的气味——"
     "上午写清醒、打算、还没完全醒的钝；下午写拖沓、走神、光在墙上慢慢挪；"
     "晚上写松懈、回想、安静下来的那点软和。具体是哪个时段看下面的「此刻」；"
@@ -195,6 +199,50 @@ def msg_text(message: dict) -> str:
     else:
         raw = ""
     return _strip_reminders(raw)
+
+
+def _msg_parts(msg) -> tuple[str, str]:
+    """把一条历史消息拆成 (role, text)，兼容 dict / 带属性的对象 / 裸字符串。
+
+    AstrBot 不同来源写进 conversations.history 的形态不一致：插件自己写的是 dict，
+    核心某些路径会写对象或纯字符串，之前直接 msg.get() 会抛
+    "'str' object has no attribute 'get'"。
+    """
+    if isinstance(msg, dict):
+        return str(msg.get("role") or ""), _msg_text(msg)
+    if isinstance(msg, str):
+        return "", msg
+    role = str(getattr(msg, "role", "") or "")
+    content = getattr(msg, "content", None)
+    if content is None:
+        return role, str(msg)
+    if isinstance(content, list):
+        buf = []
+        for part in content:
+            if isinstance(part, dict):
+                buf.append(str(part.get("text") or ""))
+            else:
+                buf.append(str(getattr(part, "text", "") or ""))
+        return role, "".join(buf)
+    return role, str(content)
+
+
+def _msg_text(msg: dict) -> str:
+    content = msg.get("content")
+    if isinstance(content, list):
+        return " ".join(str(x.get("text") or "") for x in content if isinstance(x, dict))
+    return str(content or "")
+
+
+def _repeat_ratio(a: str, b: str) -> float:
+    """两句的字符二元组重合度（0~1），用来判断是不是在车轱辘话。"""
+    def grams(t: str) -> set[str]:
+        clean = "".join(ch for ch in (t or "") if not ch.isspace())
+        return {clean[i:i + 2] for i in range(max(0, len(clean) - 1))}
+    ga, gb = grams(a), grams(b)
+    if not ga or not gb:
+        return 0.0
+    return len(ga & gb) / max(1, len(ga | gb))
 
 
 def est_tokens(text: str) -> int:
@@ -282,14 +330,14 @@ def _provider_model_name(provider) -> str | None:
 # DEFAULT_SETTINGS 中的键，缺了这一段，任何一次重载都会把 settings.json 里的
 # douyin 段整段丢掉（v1.10.4 修复）。
 DOUYIN_DEFAULTS: dict[str, Any] = {
-    "enabled": True,          # v1.16.0：是否允许操作抖音（关掉后所有 /抖音 指令与面板按钮都拒绝）
-    # ---- v1.16.0：PC 客户端屏幕视觉方案（原 Playwright 无头浏览器已下线） ----
-    "app_path": r"D:\抖音\douyin\douyin.exe",
-    "window_keyword": "抖音",
-    "process_name": "douyin.exe",
-    "launch_timeout": 25,     # 启动客户端后最多等几秒出窗口
-    "scroll_ticks": 3,        # 一次「下一个」滚几格（1~8）
-    "auto_open": True,        # 窗口没开时是否允许自动拉起客户端
+    # ---- v1.18.0：Playwright 网页版一体化模块（PC-GUI 视觉方案已整体下线） ----
+    "enabled": False,          # 抖音网页总开关：关掉后不轮询、不动作、指令一律拒绝
+    "headless": False,          # 无头运行；扫码登录时会自动改用有头窗口
+    "login_timeout": 180,      # 等管理员扫码的秒数
+    "wait_video": 4.0,         # 每次下滑后等画面稳定的秒数
+    "poll_seconds": 8.0,       # 私信轮询间隔，代码层最低锁 5 秒
+    "admin_openids": [],       # 抖音管理员 openid 白名单（与 QQ 管理员完全独立）
+    "platform_enabled": True,  # 是否把抖音私信接进 AstrBot 事件流
     "interval_minutes": 180,
     "max_minutes": 8,
     "max_videos": 8,
@@ -298,7 +346,6 @@ DOUYIN_DEFAULTS: dict[str, Any] = {
     "quiet_end": 7,
     "keywords": "",
     "notify": True,
-    # 主动消息取用抖音素材的时效（小时）：超过就不再用这批标题说话
     "material_ttl_hours": 24,
 }
 
@@ -312,8 +359,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "debug_log": False,      # 调试日志
     "carry": dict(CARRY_DEFAULTS),  # 压缩承接设置（迁移自 ctx_carry 配置）
     "proactive": dict(PROACTIVE_DEFAULTS),  # 精细化主动消息（v1.4.1 内置）
-    "diary": dict(DIARY_DEFAULTS),  # 会话日记本（v1.6.0，独立于压缩/承接）
+    "diary": dict(DIARY_DEFAULTS),
+    # 回复去复读：和上一条自己的回复太像时，换一种说法重说一次
+    "reply_dedupe": True,  # 回复去复读：和上一条自己的回复太像时换种说法
+    # 会话日记本（v1.6.0，独立于压缩/承接）
     "isohouse": dict(ISO_DEFAULTS),  # 大肥鱼等距小屋（v1.11.0）
+    "risk": dict(RISK_DEFAULTS),  # 公共行为风控（v1.18.0，抖音等模块共用）
     "notify": dict(NOTIFY_DEFAULTS),  # 详细推理完成通知（v1.7.0，独立模块）
     "agent_report": dict(AGENT_REPORT_DEFAULTS),  # 外部 agent（DSH）推理报送（v1.14.0）
     "tts": dict(TTS_DEFAULTS),  # 语音合成（v1.7.1，独立模块）
@@ -327,6 +378,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "websearch": dict(WEBSEARCH_DEFAULTS),
     "playwright_browsers_path": "",  # Playwright 浏览器目录，空=用环境变量（v1.6.3）
     "douyin": dict(DOUYIN_DEFAULTS),  # 抖音浏览（v1.4.0；v1.10.4 起纳入默认值，重载不再丢配置）
+    # 选择性上下文剪枝（v1.17.0）：规则 + 长期记忆 + 模型打分三层判断该留哪句原话
+    "prune": dict(PRUNE_DEFAULTS),
 }
 
 
@@ -539,6 +592,8 @@ class TokenPanel(Star):
         self._last_percent: dict[str, float] = {}
         # provider 窗口上限缓存：umo -> (model, limit, source, expire_ts)
         self._limit_cache: dict[str, tuple[str | None, int | None, str, float]] = {}
+        # 本轮整包预估（系统提示 + 上下文 + 工具 + 历史图片），只用于面板的「本轮≈」提示
+        self._pred_usage: dict[str, int] = {}
 
         self._settings = self._load_settings()
         # 会话备注/摘要缓存：cid -> {title, title_at, summary, msg_count, summary_at, failed_at}
@@ -584,9 +639,21 @@ class TokenPanel(Star):
         self.isohouse = IsoHouse(
             self.data_dir, lambda: self._settings, self._save_settings, self._dbg
         )
-        # 抖音 PC 客户端视觉驱动（v1.16.0）：只读窗口状态 + 截图 + 单步翻页，绝不点击画面。
-        # 与 A* / 记忆 / 通知 / 搜索等模块完全解耦，异常只影响自己。
-        self.douyin_pc = DouyinPC(self.data_dir, lambda: self._dy_settings(), self._dbg)
+        # 抖音网页版（v1.18.0）：Playwright 驱动，动作前统一问公共风控
+        self.risk_core = RiskCore(
+            lambda: (self._settings.get("risk") or {}), self._dbg, self._evt
+        )
+        self.douyin_web = DouyinWeb(
+            self.data_dir, lambda: self._dy_settings(), self._dbg, self._dy_log_add
+        )
+        self.douyin_platform = None
+        self._dy_pending: dict[str, Any] = {}
+        # 选择性上下文剪枝（v1.17.0）：规则 + 长期记忆 + 模型打分三层判断该留哪句原话
+        self.pruner = SelectivePruner(self.data_dir, lambda: self._settings, self._dbg)
+        self._prune_cache: dict[str, tuple[list[dict], dict[str, Any]]] = {}
+        self._prune_last: dict[str, Any] = {}
+        self._prune_skip: dict[str, tuple[int, int]] = {}
+        self._last_umo: str = ""
         self._dy_pending: dict[str, Any] = {}
 
         # ---- 抖音风控调速（v1.5.0）：分数/计时/回升进度只在内存里，重启即清空 ----
@@ -600,6 +667,28 @@ class TokenPanel(Star):
         self.eventlog = EventLog(self.data_dir, retention_days=30)
         set_event_sink(self.eventlog)
         self.eventlog.write("信息", "系统", "系统", f"插件启动 v{PLUGIN_VERSION}")
+        # v1.18.0：把抖音网页平台挂进平台列表并发起轮询。
+        # 这样抖音私信走 AstrBot 常规管线（人设/指令/权限/记忆/日记/TTS 全复用），
+        # 回复通过事件自身的 send() 直接回抖音私信，不会串到 QQ。
+        try:
+            if self.douyin_platform is None:
+                inst = DouyinPlatform(
+                    {"poll_seconds": float(self._dy_settings().get("poll_seconds") or 8.0)},
+                    self.context.get_event_queue(),
+                    self.douyin_web,
+                    admins_get=self._dy_admin_openids,
+                    log=self._dy_log_add,
+                )
+                insts = getattr(self.context.platform_manager, "platform_insts", None)
+                if isinstance(insts, list) and all(
+                    i.meta().id != DOUYIN_PLATFORM_ID for i in insts
+                ):
+                    insts.append(inst)
+                self.douyin_platform = inst
+                asyncio.create_task(inst.start_polling())
+                self._dbg("抖音网页平台已接入事件队列")
+        except Exception as exc:
+            logger.warning(f"[token_panel] 抖音平台接入失败: {exc}")
         logger.info(f"[token_panel] {PLUGIN_VERSION} 初始化完成，数据目录 {self.data_dir}")
 
     # ------------------------------------------------------------------ #
@@ -1229,9 +1318,10 @@ class TokenPanel(Star):
         transcript = build_transcript(head)
         if not transcript:
             return ""
-        prompt = SUMMARY_PROMPT.format(max_chars=self.summary_max_chars)
+        # v1.17.3：不再在提示词里塞字数上限，摘要长度由内容决定。
+        prompt = SUMMARY_PROMPT
         if self.enhanced_summary:
-            prompt += ENHANCED_SUMMARY_EXTRA.format(max_chars=self.summary_max_chars)
+            prompt += ENHANCED_SUMMARY_EXTRA
         resp = await prov.text_chat(
             prompt=prompt + "\n\n---\n" + transcript,
             system_prompt="你是聊天记录摘要助手，只做压缩，不参与对话，不输出多余解释。",
@@ -1368,10 +1458,12 @@ class TokenPanel(Star):
 
         backup_name, backup_error = self._backup_history(umo, cid, history)
         new_history = [self._summary_message(summary, f"压缩自前 {rounds_of(head)} 轮")] + tail
-        await self.context.conversation_manager.update_conversation(
-            umo, conversation_id=cid, history=new_history, token_usage=0
-        )
         after = est_history_tokens(new_history)
+        # v1.17.4：不再把「只算正文」的估算写进 token_usage——那不是真实占用，会让人误读。
+        # 这里保持原值不动，等下一轮请求由服务端的 usage 覆盖；面板另有「本轮预估」单独展示。
+        await self.context.conversation_manager.update_conversation(
+            umo, conversation_id=cid, history=new_history
+        )
         logger.info(
             f"[token_panel] 压缩完成 cid={cid[:8]} 轮数 {rounds_of(history)}->{rounds_of(new_history)} "
             f"tokens {before}->{after} 备份={backup_name or '失败'}"
@@ -1616,6 +1708,31 @@ class TokenPanel(Star):
             logger.warning(f"[token_panel] 写入日记失败: {exc}")
             return False
 
+    @staticmethod
+    def _diary_fit(text: str, limit: int) -> str:
+        """把日记正文收进 limit 字以内，但只在句子边界收尾，绝不留下半句。
+
+        优先用句末标点收（至少用到 60% 额度）；没有就退到逗号顿号再补句号（至少 75%）；
+        真没有任何标点时压缩并加省略号——总之不让读者看到半截话。
+        """
+        text = str(text or "").strip()
+        limit = max(20, int(limit))
+        terminal = ("。", "！", "？", "…", "」", "”")
+        # 不以逗号/顿号/分号收尾：那是半句
+        text = text.rstrip("，、；：,;: ")
+        if len(text) <= limit:
+            return text if text.endswith(terminal) else text + "。"
+        window = text[:limit]
+        for mark in ("。", "！", "？", "…", "」", "”", "；"):
+            idx = window.rfind(mark)
+            if idx >= int(limit * 0.6):
+                return window[: idx + 1].strip()
+        for mark in ("，", "、", "：", "—"):
+            idx = window.rfind(mark)
+            if idx >= int(limit * 0.75):
+                return window[:idx].rstrip("，、：— ") + "。"
+        return window[: max(1, limit - 1)].rstrip("，、；：,;: ") + "…"
+
     def _diary_add(self, umo: str, cid: str, content: str, weight: str = "medium") -> dict[str, Any] | None:
         """追加一篇日记；超过当日上限、重复内容、未达标一律安静跳过。"""
         try:
@@ -1625,7 +1742,7 @@ class TokenPanel(Star):
             if not text:
                 return None
             cfg = self._diary_cfg()
-            text = text[: int(cfg["max_single_length"])]
+            text = self._diary_fit(text, int(cfg["max_single_length"]))
             weight = str(weight or "medium").strip().lower()
             if weight not in DIARY_WEIGHT_RANK:
                 weight = "medium"
@@ -1939,6 +2056,73 @@ class TokenPanel(Star):
                 self._dbg(f"日记注入 {count} 条（{cid[:8]}）")
         except Exception as exc:
             logger.warning(f"[token_panel] 日记检索注入失败: {exc}")
+
+    @filter.on_llm_response()
+    async def reply_dedupe(self, event: AstrMessageEvent, resp: Any):
+        """回复与上一条太像时换一种说法（只改措辞，不动内容）。"""
+        try:
+            if not self._settings.get("reply_dedupe", True):
+                return
+            text = str(getattr(resp, "completion_text", "") or "").strip()
+            if len(text) < 6:
+                return
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            if not umo:
+                return
+            cm = self.context.conversation_manager
+            cid = await cm.get_curr_conversation_id(umo)
+            if not cid:
+                return
+            conv = await cm.get_conversation(umo, cid)
+            history = list(getattr(conv, "history", None) or [])
+            prev = ""
+            for msg in reversed(history):
+                role, body = _msg_parts(msg)
+                if role == "assistant":
+                    prev = body.strip()
+                    break
+            if not prev or len(prev) < 6:
+                return
+            if _repeat_ratio(text, prev) < 0.72:
+                return
+            persona = ""
+            try:
+                pm = getattr(self.context, "persona_manager", None)
+                if pm is not None:
+                    got = await pm.get_default_persona_v3(umo)
+                    persona = str((got or {}).get("prompt") or "") if isinstance(got, dict) else str(getattr(got, "prompt", "") or "")
+            except Exception:
+                persona = ""
+            provider = await self.context.get_using_provider_async(umo=umo)
+            if provider is None:
+                return
+            prompt = (
+                "你上一条回复是：\n「" + prev + "」\n\n"
+                "现在要说的意思是：\n「" + text + "」\n\n"
+                "换一种说法重说一遍：意思可以一样，但措辞、句式、起头都不能和上一条重复，"
+                "口语一点，长度差不多，只输出替换后的那句话。"
+            )
+            alt = ""
+            try:
+                got = await asyncio.wait_for(
+                    provider.text_chat(prompt=prompt, system_prompt=persona or "你说话口语、简短、不复读。",
+                                       contexts=[]),
+                    timeout=25,
+                )
+                alt = str(getattr(got, "completion_text", "") or "").strip()
+            except Exception as exc:
+                logger.debug(f"[token_panel] 复读重写失败: {exc}")
+                return
+            alt = alt.strip().strip("「」\"'")
+            if not alt or len(alt) < 4 or _repeat_ratio(alt, prev) >= 0.72:
+                return
+            try:
+                resp.completion_text = alt
+            except Exception:
+                return
+            self._dbg(f"复读改写 {len(text)}→{len(alt)} 字")
+        except Exception as exc:
+            logger.warning(f"[token_panel] 回复去复读失败: {exc}")
 
     @filter.on_llm_response()
     async def diary_capture(self, event: AstrMessageEvent, resp: Any):
@@ -2325,15 +2509,17 @@ class TokenPanel(Star):
                 return {"status": "error", "message": "模型没有返回内容"}
             reply = reply[:160]
             self.isohouse.say(reply, origin="panel", actor=self.isohouse.cfg()["char"]["name"])
-            if umo:
+            if umo and user_text:
                 try:
                     if not cid:
                         cid = str(await self.context.conversation_manager.get_curr_conversation_id(umo) or umo)
-                    if user_text:
-                        self._diary_add(umo, cid, "主人在小屋面板里说：" + user_text[:80], "light")
-                    elif scene:
-                        self._diary_add(umo, cid, f"在「{scene}」说了句：" + reply[:80], "light")
-                    self._diary_add(umo, cid, "大肥鱼回：" + reply[:100], "light")
+                    # 只有主人真的在小屋对话框里说话才记；自动漫游 / 到点位的自言自语只是场景台词，不写日记
+                    line = (
+                        "在小屋里跟主人聊天：主人说「"
+                        + self._diary_fit(str(user_text).strip(), 70)
+                        + "」，我回「" + self._diary_fit(reply, 110) + "」"
+                    )
+                    self._diary_add(umo, cid, line, "low")
                 except Exception as exc:
                     self._dbg(f"小屋对话写日记失败: {exc}")
             return {"status": "ok", "data": {"reply": reply}}
@@ -2583,7 +2769,11 @@ class TokenPanel(Star):
             f"保留轮数：{self.keep_rounds} 轮\n"
             f"估算窗口：{self.token_limit} tokens\n"
             f"增强摘要：{'开启' if self.enhanced_summary else '关闭'}\n"
-            "说明：只在单次请求内把老对话换成摘要，不改数据库；真要瘦身请用 /ctx_compress。"
+            f"选择性剪枝：{'开启' if self.pruner.cfg().get('enabled') else '关闭'}"
+            f"（{int(self.pruner.cfg().get('trigger_rounds') or 26)} 轮 / "
+            f"{int(self.pruner.cfg().get('trigger_tokens') or 55000)} tokens 触发，"
+            f"保留最近 {int(self.pruner.cfg().get('keep_recent') or 10)} 轮原文）\n"
+            "说明：剪枝会先摘出必须原句记住的话做成记忆卡，其余折叠成摘要，并整份备份。"
         )
 
     @filter.command("ctx_diary")
@@ -2629,56 +2819,151 @@ class TokenPanel(Star):
         )
 
     # ------------------------------------------------------------------ #
+    async def _selective_contexts(
+        self, umo: str, cid: str, contexts: list[dict], persist: bool = False
+    ) -> tuple[list[dict], dict[str, Any]]:
+        """把旧轮次里「必须记住的原句」摘成记忆卡，其余折叠成摘要。
+
+        keep_recent 轮永远原样保留；persist=True 时把结果写回会话库（带整份备份）。
+        """
+        cfg = self.pruner.cfg()
+        keep_recent = max(1, int(cfg.get("keep_recent") or 10))
+        # 上次「没收益、先不动」之后，等会话再长 4 轮或 token 再涨 15% 才重新试，
+        # 否则每轮都白跑一次打分模型。
+        mark = self._prune_skip.get(umo)
+        if mark:
+            now_rounds, now_tokens = rounds_of(contexts), est_history_tokens(contexts)
+            if now_rounds < mark[0] + 4 and now_tokens < int(mark[1] * 1.15):
+                return [], {"skipped": "刚检查过，暂时没有收益"}
+        head, tail = split_history(contexts, keep_recent)
+        if not head:
+            return [], {"skipped": "没有可剪的旧轮次"}
+        key = f"{cid}:{len(head)}:{rounds_of(head)}"
+        cached = self._prune_cache.get(key)
+        if cached:
+            return cached[0], {**cached[1], "cached": True}
+
+        prov = await self._provider_for(umo)
+        plan = await self.pruner.plan(umo, head, prov)
+        card = SelectivePruner.fact_card(plan.get("keep") or [], rounds_of(head))
+        folded = SelectivePruner.folded_messages(plan.get("fold") or [], plan.get("drop") or [])
+        summary = ""
+        if folded:
+            try:
+                summary = SelectivePruner.clean_summary(await self._summarize(umo, folded))
+            except Exception as exc:
+                self._dbg(f"剪枝摘要失败（只写记忆卡）：{exc}")
+        new_contexts: list[dict] = []
+        if card:
+            new_contexts.append({"role": "assistant", "content": card})
+        if summary:
+            new_contexts.append(self._summary_message(summary, f"选择性剪枝自前 {rounds_of(head)} 轮"))
+        if not new_contexts:
+            return [], {"skipped": "没有产出内容"}
+        new_contexts += tail
+
+        before_tokens = est_history_tokens(contexts)
+        after_tokens = est_history_tokens(new_contexts)
+        # 短对话里「记忆卡 + 摘要」可能比重放原文还长：没省到 12% 就干脆不动，别越剪越胖。
+        if before_tokens and after_tokens >= before_tokens * 0.88:
+            self._prune_skip[umo] = (rounds_of(contexts), before_tokens)
+            return [], {"skipped": f"剪完只省了 {max(0, 100 - after_tokens * 100 // before_tokens)}%，这次先不动"}
+
+        info = {
+            "before": before_tokens,
+            "after": after_tokens,
+            "rounds_before": rounds_of(contexts),
+            "rounds_after": rounds_of(new_contexts),
+            "keep": min(len(plan.get("keep") or []), 14),
+            "fold": len(plan.get("fold") or []),
+            "drop": len(plan.get("drop") or []),
+            "model_used": plan.get("model_used", 0),
+            "keep_recent": keep_recent,
+        }
+        self._prune_cache[key] = (new_contexts, info)
+        if len(self._prune_cache) > 64:
+            for old_key in list(self._prune_cache)[:16]:
+                self._prune_cache.pop(old_key, None)
+
+        backup_name, backup_error = "", ""
+        if persist:
+            backup_name, backup_error = self._backup_history(umo, cid, contexts)
+            try:
+                await self.context.conversation_manager.update_conversation(
+                    umo,
+                    conversation_id=cid,
+                    history=new_contexts,
+                )
+                logger.info(
+                    f"[token_panel] 选择性剪枝落库 cid={cid[:8]} {info['before']}->{info['after']} tokens "
+                    f"保留原句 {info['keep']} 段"
+                )
+            except Exception as exc:
+                logger.warning(f"[token_panel] 剪枝写回失败: {exc}")
+                backup_error = backup_error or f"{type(exc).__name__}: {exc}"
+
+        try:
+            self._carry_log_add(
+                {
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "kind": "selective",
+                    "type": "选择性剪枝（落库）" if persist else "选择性剪枝（本次请求）",
+                    "cid": cid,
+                    "umo": umo,
+                    "label": self._log_label(umo, cid),
+                    "before": info["before"],
+                    "after": info["after"],
+                    "keep": info["keep_recent"],
+                    "rounds_before": info["rounds_before"],
+                    "rounds_after": info["rounds_after"],
+                    "backup": backup_name,
+                    "backup_ok": bool(backup_name),
+                    "backup_error": backup_error,
+                    "new_cid": "",
+                    "request_only": not persist,
+                    "keep_fragments": info["keep"],
+                    "fold_fragments": info["fold"],
+                    "drop_fragments": info["drop"],
+                }
+            )
+        except Exception as exc:
+            self._dbg(f"写剪枝日志失败: {exc}")
+        return new_contexts, info
+
     @filter.on_llm_request()
     async def auto_compress(self, event: AstrMessageEvent, req):
         try:
-            if not self._auto_enabled():
+            # 先记一份「整包预估」：这是下一轮真正会发出去的东西，比只看正文准得多。
+            try:
+                ctx_now = getattr(req, "contexts", None) or []
+                sys_prompt = getattr(req, "system_prompt", "") or ""
+                pred = est_tokens(sys_prompt) + est_history_tokens(
+                    [m for m in ctx_now if isinstance(m, dict)]
+                )
+                pred += self._tool_tokens(req)
+                if pred > 0:
+                    self._pred_usage[event.unified_msg_origin] = int(pred)
+            except Exception as exc:
+                self._dbg(f"预估上下文失败：{exc}")
+            pcfg = self.pruner.cfg()
+            if not pcfg.get("enabled") and not self._auto_enabled():
                 return
             contexts = getattr(req, "contexts", None)
             if not isinstance(contexts, list) or len(contexts) < 8:
                 return
             est = sum(est_tokens(msg_text(m)) + 4 for m in contexts if isinstance(m, dict))
-            if est < self.token_limit * self.auto_threshold:
+            rounds = rounds_of(contexts)
+            trig_rounds = int(pcfg.get("trigger_rounds") or 26)
+            trig_tokens = int(pcfg.get("trigger_tokens") or 55000)
+            if rounds < trig_rounds and est < trig_tokens:
                 return
             umo = event.unified_msg_origin
+            self._last_umo = umo
             cid = await self.context.conversation_manager.get_curr_conversation_id(umo) or umo
-            head, tail = split_history(contexts, self.keep_rounds)
-            if not head:
+            new_contexts, info = await self._selective_contexts(umo, str(cid), contexts)
+            if not new_contexts:
                 return
-            cached = self._auto_cache.get(cid)
-            if cached and cached[0] == len(head):
-                summary = cached[1]
-            else:
-                summary = await self._summarize(umo, head)
-                if not summary:
-                    return
-                self._auto_cache[cid] = (len(head), summary)
-                # 只在真正生成新摘要时记一条日志，避免每次请求都刷屏
-                try:
-                    new_contexts = [self._summary_message(summary, "本次请求内自动压缩")] + tail
-                    self._carry_log_add(
-                        {
-                            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "kind": "auto",
-                            "type": "请求内自动压缩",
-                            "cid": str(cid),
-                            "umo": umo,
-                            "label": self._log_label(umo, str(cid)),
-                            "before": est,
-                            "after": est_history_tokens(new_contexts),
-                            "keep": self.keep_rounds,
-                            "rounds_before": rounds_of(contexts),
-                            "rounds_after": rounds_of(new_contexts),
-                            "backup": "",
-                            "backup_ok": None,
-                            "backup_error": "",
-                            "new_cid": "",
-                            "request_only": True,
-                        }
-                    )
-                except Exception as exc:
-                    self._dbg(f"写自动压缩日志失败: {exc}")
-            req.contexts = [self._summary_message(summary, "本次请求内自动压缩")] + tail
+            req.contexts = new_contexts
             logger.info(
                 f"[token_panel] 请求内自动压缩 cid={str(cid)[:8]} {est} tokens -> "
                 f"{est_history_tokens(req.contexts)} tokens"
@@ -2816,6 +3101,11 @@ class TokenPanel(Star):
             register(f"{PAGE_PREFIX}/compress", self.api_compress, ["POST"], "压缩会话上下文")
             register(f"{PAGE_PREFIX}/continue", self.api_continue, ["POST"], "生成承接摘要并换会话")
             register(f"{PAGE_PREFIX}/carry", self.api_carry, ["GET", "POST"], "压缩承接设置")
+            # ---- v1.17.0：选择性上下文剪枝 ----
+            register(f"{PAGE_PREFIX}/prune-info", self.api_prune_info, ["GET"], "剪枝配置与上次结果")
+            register(f"{PAGE_PREFIX}/prune-save", self.api_prune_save, ["POST"], "保存剪枝配置")
+            register(f"{PAGE_PREFIX}/prune-run", self.api_prune_run, ["POST"], "对当前会话立即剪枝")
+            register(f"{PAGE_PREFIX}/prune-restore", self.api_prune_restore, ["POST"], "回滚上一次剪枝")
             register(f"{PAGE_PREFIX}/diary-overview", self.api_diary_overview, ["GET"], "会话日记本总览")
             register(f"{PAGE_PREFIX}/diary-settings", self.api_diary_settings, ["GET", "POST"], "会话日记本设置")
             register(f"{PAGE_PREFIX}/diary-clear", self.api_diary_clear, ["POST"], "清空会话日记本")
@@ -2825,12 +3115,27 @@ class TokenPanel(Star):
             register(f"{PAGE_PREFIX}/dy-settings", self.api_dy_settings, ["POST"], "抖音浏览设置")
             register(f"{PAGE_PREFIX}/dy-run", self.api_dy_run, ["POST"], "抖音浏览立即执行")
             register(f"{PAGE_PREFIX}/dy-log", self.api_dy_log, ["GET"], "抖音浏览日志")
-            # ---- v1.16.0：PC 客户端视觉驱动 ----
-            register(f"{PAGE_PREFIX}/dy-pc-state", self.api_dy_pc_state, ["GET"], "抖音PC窗口状态")
-            register(f"{PAGE_PREFIX}/dy-pc-shot", self.api_dy_pc_shot, ["POST"], "抖音PC截图并识别")
-            register(f"{PAGE_PREFIX}/dy-pc-next", self.api_dy_pc_next, ["POST"], "抖音PC切下一个")
-            register(f"{PAGE_PREFIX}/dy-pc-open", self.api_dy_pc_open, ["POST"], "打开抖音PC客户端")
+            # ---- v1.18.0：Playwright 网页版 ----
+            register(f"{PAGE_PREFIX}/dy-web-status", self.api_dy_web_status, ["GET"], "抖音网页状态")
+            register(f"{PAGE_PREFIX}/dy-web-login", self.api_dy_web_login, ["POST"], "扫码登录抖音")
+            register(f"{PAGE_PREFIX}/dy-web-logout", self.api_dy_web_logout, ["POST"], "关闭抖音浏览器")
+            register(f"{PAGE_PREFIX}/dy-next", self.api_dy_next, ["POST"], "抖音下一个视频")
+            register(f"{PAGE_PREFIX}/dy-like", self.api_dy_like, ["POST"], "抖音点赞当前视频")
+            register(f"{PAGE_PREFIX}/dy-comment", self.api_dy_comment, ["POST"], "抖音评论当前视频")
+            register(f"{PAGE_PREFIX}/dy-share", self.api_dy_share, ["POST"], "分享当前视频到私信")
+            register(f"{PAGE_PREFIX}/dy-risk", self.api_dy_risk, ["GET", "POST"], "抖音行为风控参数")
             register(f"{PAGE_PREFIX}/dy-check", self.api_dy_check, ["GET"], "抖音模块自检（只读）")
+            register(f"{PAGE_PREFIX}/dy-debug", self.api_dy_debug, ["GET"], "抖音页面调试（临时）")
+            register(f"{PAGE_PREFIX}/dy-debug-poll", self.api_dy_debug_poll, ["GET"], "抖音私信拉取调试（临时）")
+            register(f"{PAGE_PREFIX}/dy-debug-home", self.api_dy_debug_home, ["GET"], "抖音首页调试（临时）")
+            register(f"{PAGE_PREFIX}/dy-debug-dm", self.api_dy_debug_dm, ["GET"], "抖音私信入口调试（临时）")
+            register(f"{PAGE_PREFIX}/dy-debug-feed", self.api_dy_debug_feed, ["GET"], "抖音信息流调试（临时）")
+            register(f"{PAGE_PREFIX}/dy-debug-actions", self.api_dy_debug_actions, ["GET"], "抖音动作探测（临时）")
+            register(f"{PAGE_PREFIX}/dy-debug-head", self.api_dy_debug_head, ["GET"], "抖音页头元素（临时）")
+            register(f"{PAGE_PREFIX}/dy-debug-send", self.api_dy_debug_send, ["GET"], "抖音私信发送调试（临时）")
+            register(f"{PAGE_PREFIX}/dy-debug-emit", self.api_dy_debug_emit, ["GET"], "抖音事件注入调试（临时）")
+            register(f"{PAGE_PREFIX}/dy-like-probe", self.api_dy_like_probe, ["GET"], "抖音点赞探测（临时）")
+            register(f"{PAGE_PREFIX}/dy-rail", self.api_dy_rail, ["GET"], "抖音操作栏探测（临时）")
             register(f"{PAGE_PREFIX}/net-overview", self.api_net_overview, ["POST"], "联网搜索监控")
             register(f"{PAGE_PREFIX}/net-clear", self.api_net_clear, ["POST"], "清空搜索日志")
             # ---- 精细化主动消息（v1.4.1） ----
@@ -3142,6 +3447,21 @@ class TokenPanel(Star):
             await self.notify.finish(event, run_context, response)
         except Exception as exc:
             logger.warning(f"[token_panel] 推理通知发送失败: {exc}")
+        # 选择性剪枝落库：放在历史保存之后，避免被核心这一轮的保存覆盖
+        try:
+            cfg = self.pruner.cfg()
+            if cfg.get("enabled") and cfg.get("persist", True):
+                umo = event.unified_msg_origin
+                cid, history = await self._history_of(umo, None)
+                if cid:
+                    rounds = rounds_of(history)
+                    tokens = est_history_tokens(history)
+                    if rounds >= int(cfg.get("trigger_rounds") or 26) or tokens >= int(
+                        cfg.get("trigger_tokens") or 55000
+                    ):
+                        await self._selective_contexts(umo, cid, history, persist=True)
+        except Exception as exc:
+            logger.warning(f"[token_panel] 落库剪枝跳过: {exc}")
 
     def _notify_save(self, patch: dict[str, Any]) -> dict[str, Any]:
         """写回 notify 配置并落盘（失败只记日志，不影响指令返回）。"""
@@ -3588,6 +3908,9 @@ class TokenPanel(Star):
                             "limit": limit,
                             "limit_source": source,
                             "used": used,
+                            # v1.17.4：上一次请求的真实用量 + 本轮整包预估（系统提示+上下文+工具），
+                            # used 为 0 时前端用它顶上，并标成「估」。
+                            "predicted": int(self._pred_usage.get(str(umo), 0) or 0),
                             "remaining": (max(0, limit - used) if limit else None),
                             "percent": percent,
                             "updated_at": _load_local_time(getattr(row, "updated_at", None)),
@@ -4100,6 +4423,163 @@ class TokenPanel(Star):
             logger.warning(f"[token_panel] 压缩承接设置保存失败: {exc}")
             return {"status": "error", "message": "保存设置失败"}
 
+    async def api_prune_info(self) -> dict[str, Any]:
+        """剪枝配置 + 上次执行结果（面板只读展示）。"""
+        try:
+            cfg = dict(self.pruner.cfg())
+            cfg["persist"] = bool(cfg.get("persist", True))
+            last = dict(self._prune_last or {})
+            if not last:
+                for entry in reversed(self._carry_log_read()):
+                    if entry.get("kind") == "selective":
+                        last = entry
+                        break
+            return {"status": "ok", "data": {"cfg": cfg, "last": last, "defaults": dict(PRUNE_DEFAULTS)}}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_prune_restore(self) -> dict[str, Any]:
+        """把最近一次剪枝/压缩前的历史整份写回（备份来自 carry_backups）。"""
+        try:
+            body = await self._json_body()
+            umo = str(body.get("umo") or "") or str(self._last_umo or "")
+            cid = str(body.get("cid") or "")
+            if not umo:
+                return {"status": "error", "message": "不知道该回滚哪个会话"}
+            safe = re.sub(r"[^0-9A-Za-z._-]+", "_", umo)[:60]
+            folder = self.carry_backup_dir / safe
+            if not folder.exists():
+                return {"status": "error", "message": "这个会话还没有备份"}
+            files = sorted(folder.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if cid:
+                hit = [p for p in files if p.name.startswith(str(cid)[:8])]
+                files = hit or files
+            if not files:
+                return {"status": "error", "message": "没有可用的备份文件"}
+            target = files[0]
+            hist = json.loads(target.read_text(encoding="utf-8"))
+            if not isinstance(hist, list) or not hist:
+                return {"status": "error", "message": "备份内容不是历史数组，已放弃回滚"}
+            cm = self.context.conversation_manager
+            use_cid = str(cid or "")
+            if not use_cid:
+                try:
+                    use_cid = str(await cm.get_curr_conversation_id(umo) or "")
+                except Exception as exc:
+                    self._dbg(f"回滚取当前会话 id 失败：{exc}")
+            if not use_cid:
+                prefix = target.name.split("-")[0]
+                try:
+                    for row in await self._fetch_rows(limit=50):
+                        rc = str(getattr(row, "conversation_id", "") or "")
+                        if rc.startswith(prefix) and str(getattr(row, "user_id", "") or "") == umo:
+                            use_cid = rc
+                            break
+                except Exception as exc:
+                    self._dbg(f"回滚查会话失败：{exc}")
+            if not use_cid:
+                return {"status": "error", "message": "定位不到要回滚的会话"}
+            await cm.update_conversation(
+                umo,
+                conversation_id=use_cid,
+                history=hist,
+            )
+            # 回读确认真的写回去了（update_conversation 对未知 cid 会静默无效）
+            check_cid, check_hist = await self._history_of(umo, None)
+            if len(check_hist or []) != len(hist):
+                return {
+                    "status": "error",
+                    "message": f"写回后校验不一致（当前 {len(check_hist or [])} 条 / 备份 {len(hist)} 条）",
+                }
+            self._prune_cache.pop(f"{use_cid}", None)
+            self._carry_log_add(
+                {
+                    "kind": "restore",
+                    "type": "回滚备份",
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "umo": umo,
+                    "cid": use_cid,
+                    "label": self._log_label(umo, use_cid),
+                    "after": len(hist),
+                    "backup": target.name,
+                }
+            )
+            self._evt("信息", "面板", "配置", f"选择性剪枝回滚：{target.name}")
+            return {
+                "status": "ok",
+                "data": {"restored": target.name, "messages": len(hist), "cid": use_cid},
+            }
+        except Exception as exc:
+            logger.warning(f"[token_panel] 剪枝回滚失败: {exc}")
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_prune_save(self) -> dict[str, Any]:
+        """保存剪枝配置（只认白名单键，范围全部夹紧）。"""
+        try:
+            payload = await self._json_body()
+            cfg = dict(self.pruner.cfg())
+            if "enabled" in payload:
+                cfg["enabled"] = bool(payload.get("enabled"))
+            if "model_scoring" in payload:
+                cfg["model_scoring"] = bool(payload.get("model_scoring"))
+            if "memory_boost" in payload:
+                cfg["memory_boost"] = bool(payload.get("memory_boost"))
+            if "trigger_rounds" in payload:
+                cfg["trigger_rounds"] = _clamp_int(payload.get("trigger_rounds"), 8, 200, 26)
+            if "trigger_tokens" in payload:
+                cfg["trigger_tokens"] = _clamp_int(payload.get("trigger_tokens"), 8000, 200000, 55000)
+            if "keep_recent" in payload:
+                cfg["keep_recent"] = _clamp_int(payload.get("keep_recent"), 2, 40, 10)
+            if "max_drop_ratio" in payload:
+                try:
+                    ratio = float(payload.get("max_drop_ratio"))
+                except (TypeError, ValueError):
+                    ratio = 0.4
+                cfg["max_drop_ratio"] = round(min(0.9, max(0.05, ratio)), 2)
+            self._settings["prune"] = cfg
+            self._save_settings()
+            cfg["persist"] = bool(cfg.get("persist", True))
+            self._evt("信息", "管理员", "配置", "选择性剪枝配置已更新")
+            return {"status": "ok", "data": {"cfg": cfg}}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_prune_run(self) -> dict[str, Any]:
+        """对当前会话立即跑一次选择性剪枝（落库 + 备份）。"""
+        try:
+            umo = str((await self._json_body()).get("umo") or "") or str(self._last_umo or "")
+            if not umo:
+                # 面板刚打开、还没等到本轮请求时，用最近有更新的那条会话兜底
+                try:
+                    best, best_used = "", -1
+                    for row in await self._fetch_rows(limit=30):
+                        cand = str(getattr(row, "user_id", "") or "")
+                        used = int(getattr(row, "token_usage", 0) or 0)
+                        if cand and used > best_used:
+                            best, best_used = cand, used
+                    umo = best
+                except Exception as exc:
+                    self._dbg(f"剪枝兜底取会话失败：{exc}")
+            if not umo:
+                return {"status": "error", "message": "还没等到过一轮对话，先在聊天里说句话再剪"}
+            cid, history = await self._history_of(umo, None)
+            if not cid or not history:
+                return {"status": "error", "message": "这个会话还没有历史"}
+            new_contexts, info = await self._selective_contexts(umo, cid, history, persist=True)
+            if not new_contexts:
+                return {"status": "ok", "data": {"info": info, "preview": [], "skipped": True}}
+            self._prune_last = {
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "kind": "selective",
+                "type": "选择性剪枝（手动）",
+                "cid": cid,
+                "umo": umo,
+                **{k: info.get(k) for k in ("before", "after", "rounds_before", "rounds_after", "keep", "fold", "drop", "model_used")},
+            }
+            return {"status": "ok", "data": {"info": info, "preview": new_contexts[:2]}}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
     async def api_compress_log(self) -> dict[str, Any]:
         """压缩日志（只读，最近在前）。"""
         try:
@@ -4117,9 +4597,9 @@ class TokenPanel(Star):
     async def tool_web_search(self, event: AstrMessageEvent, query: str, count: int = 5) -> str:
         """联网搜索。把关键词交给搜索服务，拿回网页标题、链接与摘要。
 
-        什么时候用：新闻时事、价格行情、具体参数、最新版本、教程步骤、报错排查、你不确定又想弄准的资料。
-        什么时候不用：闲聊、你自己的设定、常识和梗。搜之前先想想你是不是本来就知道。
-        一次问题最多搜两轮（必要时可用中英文各搜一次），拿到结果就自己嚼碎了回答，别把链接整段甩给用户。
+        什么时候用：新闻时事、价格行情、具体参数、版本号、人名作品细节、软件用法、教程步骤、报错排查、政策规定，以及任何你心里没底、想说「好像是」的地方。你不熟的主题、刚发生的事、用户问得很具体的数字，都先搜再答。
+        什么时候不用：闲聊、你自己的设定、常识和梗、打招呼。
+        态度：宁可搜一下也别硬编；用户没要求也可以主动搜，只要能让答案更准。一次问题最多两轮（必要时中英文各搜一次），拿到结果就自己嚼碎了回答，别把链接整段甩给用户。
 
         Args:
             query(string): 搜索关键词，像人一样简短，不要写成整句问题
@@ -4516,7 +4996,14 @@ class TokenPanel(Star):
         except Exception:
             return []
 
-    def _dy_log_add(self, entry: dict[str, Any]) -> None:
+    def _dy_log_add(self, entry: Any, text: str = "") -> None:
+        """写一条抖音日志。既支持传整条 dict，也支持 (kind, text) 两个参数。"""
+        if not isinstance(entry, dict):
+            entry = {
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "kind": str(entry or "动作"),
+                "text": str(text or ""),
+            }
         items = self._dy_log_read()
         items.insert(0, entry)
         try:
@@ -4706,128 +5193,17 @@ class TokenPanel(Star):
 
     # ---------------- 抖音 PC 客户端视觉会话（v1.16.0） ---------------- #
 
-    def _dy_guard(self) -> dict[str, Any] | None:
-        """操作前的安全闸：关着 / 找不到窗口 / 最小化 / 被挡住，一律返回错误字典。"""
-        dy = self._dy_settings()
-        if not bool(dy.get("enabled", True)):
-            return {"ok": False, "error": "抖音操作现在是关着的，去面板「抖音」页把开关打开再试。"}
+    @staticmethod
+    def _tool_tokens(req) -> int:
+        """工具 schema 也占上下文：按 JSON 体积粗估，拿不到就返回 0。"""
         try:
-            st = self.douyin_pc.state()
-        except Exception as exc:
-            return {"ok": False, "error": f"读取窗口状态失败：{type(exc).__name__}: {exc}"}
-        if not st.found:
-            return {"ok": False, "error": "没找到抖音窗口，先把抖音 PC 客户端打开。", "state": st.as_dict()}
-        if getattr(st, "elevated", False):
-            return {"ok": False,
-                    "error": ("抖音是「以管理员身份」开着的，我在普通权限下没法往里发操作"
-                              "（系统会拦）。把抖音彻底退出（托盘图标右键退出），再正常双击打开一次就行。"),
-                    "state": st.as_dict()}
-        if st.minimized:
-            return {"ok": False, "error": "抖音窗口被最小化了，我看不到画面，已经停手。", "state": st.as_dict()}
-        if not st.visible:
-            return {"ok": False, "error": "抖音窗口现在不可见，我已经停手。", "state": st.as_dict()}
-        if st.covered >= 0.35:
-            return {"ok": False, "error": "抖音窗口被别的窗口挡住了，看不太清，我已经停手。", "state": st.as_dict()}
-        return None
-
-    async def _dy_pc_session(self, eff: dict[str, Any]) -> dict[str, Any]:
-        """兜底一次有界会话：最多 N 条 / M 分钟，每条停一会儿，任何异常立即停。
-
-        只会做三件事：截图、识别、在抖音窗口内发滚动消息。绝不点击画面、
-        绝不去点别的窗口、绝不做点赞评论关注这类互动。
-        """
-        started = time.monotonic()
-        try:
-            max_videos = max(1, min(12, int(eff.get("videos", 3) or 3)))
+            tools = getattr(req, "func_tool", None)
+            if not tools:
+                return 0
+            dump = str(getattr(tools, "tools", None) or tools)
+            return est_tokens(dump)
         except Exception:
-            max_videos = 3
-        try:
-            max_minutes = max(1.0, min(30.0, float(eff.get("minutes", 5) or 5)))
-        except Exception:
-            max_minutes = 5.0
-        try:
-            dwell_min = max(2.0, float(eff.get("dwell_min", 8) or 8))
-            dwell_max = max(dwell_min, float(eff.get("dwell_max", 15) or 15))
-        except Exception:
-            dwell_min, dwell_max = 8.0, 15.0
-        dwell = round((dwell_min + dwell_max) / 2, 1)
-
-        dy = self._dy_settings()
-        guard = self._dy_guard()
-        if guard is not None and bool(dy.get("auto_open", True)) and not self.douyin_pc.state().found:
-            opened = await asyncio.to_thread(self.douyin_pc.open_app)
-            if not opened.get("ok"):
-                return {"ok": False, "error": opened.get("message") or "打开抖音客户端失败",
-                        "items": [], "minutes": 0.0, "risk": False}
-            guard = self._dy_guard()
-        if guard is not None:
-            return {"ok": False, "error": str(guard.get("error") or "窗口不可用"),
-                    "items": [], "minutes": 0.0, "risk": False}
-
-        items: list[dict[str, Any]] = []
-        risk = False
-        error = ""
-        for idx in range(max_videos):
-            if (time.monotonic() - started) / 60.0 >= max_minutes:
-                break
-            guard = self._dy_guard()
-            if guard is not None:
-                error = str(guard.get("error") or "")
-                break
-            try:
-                snap = await asyncio.to_thread(self.douyin_pc.snapshot, True, "run")
-            except Exception as exc:
-                error = f"截图失败：{type(exc).__name__}: {exc}"
-                break
-            if not snap.get("ok"):
-                error = str(snap.get("error") or "截图失败")
-                break
-            kind = str(snap.get("kind") or "unknown")
-            if kind == "risk":
-                risk = True
-                error = "识别到安全验证 / 滑块，已停手等你处理"
-                break
-            if kind == "login":
-                error = "抖音要求登录（扫码或验证码），我没法替你登，已停手"
-                break
-            title = str(snap.get("title") or "").strip()
-            if not title:
-                cands = snap.get("titles") or []
-                title = str(cands[0]) if cands else ""
-            if not title and kind == "unknown":
-                error = "画面上识别不到可用的标题，界面可能变了，已停手"
-                break
-            items.append({
-                "title": (title or f"第 {idx + 1} 条（没识别到标题）")[:120],
-                "dwell": dwell,
-                "watched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            })
-            if idx + 1 >= max_videos:
-                break
-            left_sec = max_minutes * 60 - (time.monotonic() - started)
-            if left_sec <= dwell + 3:
-                break
-            await asyncio.sleep(min(dwell, 25.0))
-            try:
-                nxt = await asyncio.to_thread(self.douyin_pc.next_video)
-            except Exception as exc:
-                error = f"翻页失败：{type(exc).__name__}: {exc}"
-                break
-            if not nxt.get("ok"):
-                error = str(nxt.get("error") or nxt.get("message") or "翻页失败")
-                break
-            if nxt.get("changed") is False:
-                error = "画面没有任何变化，可能已经不是视频流了，已停手"
-                break
-
-        minutes = round((time.monotonic() - started) / 60.0, 1)
-        return {
-            "ok": bool(items) and not error,
-            "items": items,
-            "minutes": minutes,
-            "risk": risk,
-            "error": error,
-        }
+            return 0
 
     async def _dy_run_once(self, manual: bool = False) -> dict[str, Any]:
         """跑一次游客浏览；manual=True 时忽略间隔与每日上限（仍受时长/条数约束）。"""
@@ -4848,7 +5224,7 @@ class TokenPanel(Star):
         self._dy_save_state(state)
         started = datetime.now()
         # v1.16.0：改为驱动本地抖音 PC 客户端（截图 + OCR + 单步翻页），不再起无头浏览器。
-        result = await self._dy_pc_session(eff)
+        result = await self._dy_web_session(eff)
 
         session_id = started.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex()
         raw_items = result.get("items") or []
@@ -5004,136 +5380,400 @@ class TokenPanel(Star):
             "不点别的窗口，也不点赞、评论、关注。"
         )
 
-    def _dy_state_text(self) -> str:
-        try:
-            st = self.douyin_pc.state()
-        except Exception as exc:
-            return f"读窗口状态出错了：{type(exc).__name__}: {exc}"
-        if not st.found:
-            return "没找到抖音窗口——客户端还没开，或者进程名不是 douyin.exe。"
-        bits = [f"窗口「{st.title or '抖音'}」在（{st.rect[2]}×{st.rect[3]}）"]
-        if getattr(st, "elevated", False):
-            bits.append("但它是管理员权限启动的，我动不了它（要退出后正常打开一次）")
-        elif st.minimized:
-            bits.append("但被最小化了，我看不到画面")
-        elif not st.visible:
-            bits.append("但当前不可见")
-        elif st.covered >= 0.35:
-            bits.append(f"有 {int(st.covered * 100)}% 被别的窗口挡着")
-        else:
-            bits.append("看得很清楚，可以操作")
-        if st.foreground:
-            bits.append("现在是前台窗口")
-        return "，".join(bits) + "。"
+    def _dy_ready(self) -> tuple[bool, str]:
+        cfg = self._dy_settings()
+        if not bool(cfg.get("enabled")):
+            return False, "抖音网页模块现在是关着的，先去面板打开「抖音网页总开关」。"
+        return True, ""
 
-    def _dy_restate(self, action: str) -> str:
-        """按人设语气复述一遍，并挂起待确认动作（120 秒内有效）。"""
-        code = self.DY_ACTIONS.get(action, "")
-        if not code or code == "stop":
-            self._dy_pending = {}
-            return "好，那我不动它了。"
-        lines = {
-            "open": "我去把抖音客户端叫到前面来，只唤醒它，不点里面任何东西。",
-            "next": "我就在抖音窗口里往下滑一个视频，不点赞不评论，滑完就停。",
-            "shot": "我截一张抖音现在的画面回传给你看，不碰画面任何地方。",
+    def _dy_admin_openids(self) -> list[str]:
+        return [str(x) for x in (self._dy_settings().get("admin_openids") or [])]
+
+    def _dy_risk(self, action: str, uid: str = "") -> dict[str, Any]:
+        return self.risk_core.guard(DOUYIN_PLATFORM_ID, uid or "admin", action)
+
+    @staticmethod
+    def _dy_risk_line(info: dict[str, Any]) -> str:
+        if info.get("ok"):
+            return f"风控放行，" + (f"先等 {info['wait']} 秒" if info.get("wait") else "直接来")
+        return f"风控拦住了：{info.get('reason') or '先停一停'}"
+
+    async def _dy_web_status(self) -> dict[str, Any]:
+        state = await self.douyin_web.status()
+        cfg = self._dy_settings()
+        return {
+            "status": "ok",
+            "data": {
+                "state": state,
+                "risk": self.risk_core.snapshot(),
+                "platform": DOUYIN_PLATFORM_ID,
+                "min_poll_seconds": MIN_POLL_SECONDS,
+                "admin_openids": self._dy_admin_openids(),
+                "settings": {
+                    "enabled": bool(cfg.get("enabled")),
+                    "headless": bool(cfg.get("headless", True)),
+                    "poll_seconds": float(cfg.get("poll_seconds") or 8),
+                    "platform_enabled": bool(cfg.get("platform_enabled", True)),
+                },
+            },
         }
-        self._dy_pending = {"action": code, "ts": time.time(), "label": action}
+
+    async def api_dy_web_status(self) -> dict[str, Any]:
+        """面板：抖音网页状态（浏览器 / 登录 / 风控）。"""
+        try:
+            return await self._dy_web_status()
+        except Exception as exc:
+            return {"status": "error", "message": f"读取状态失败：{exc}"}
+
+    async def api_dy_web_login(self) -> dict[str, Any]:
+        """面板：拉起有头浏览器扫码登录（不看总开关，登录属于配置动作）。"""
+        try:
+            res = await self.douyin_web.open_login()
+            self._evt("信息", "管理员", "配置", f"抖音扫码登录：{res.get('message')}")
+            return {"status": "ok" if res.get("ok") else "error", "data": res, "message": res.get("message", "")}
+        except Exception as exc:
+            return {"status": "error", "message": f"登录失败：{exc}"}
+
+    async def api_dy_web_logout(self) -> dict[str, Any]:
+        """面板：关闭浏览器（cookie 保留在 profile 里）。"""
+        try:
+            res = await self.douyin_web.stop()
+            return {"status": "ok", "data": res}
+        except Exception as exc:
+            return {"status": "error", "message": f"关闭失败：{exc}"}
+
+    async def _dy_action(self, action: str, arg: str = "") -> dict[str, Any]:
+        """统一动作出口：先问风控，再动浏览器，最后记日志。"""
+        ok, msg = self._dy_ready()
+        if not ok:
+            return {"ok": False, "message": msg}
+        st = await self.douyin_web.status()
+        if not st.get("running"):
+            return {"ok": False, "message": "抖音网页浏览器还没开，先点「扫码登录」把浏览器拉起来。"}
+        if st.get("gate"):
+            return {"ok": False, "message": st.get("message") or "抖音页面卡在验证/登录页，先去处理一下。"}
+        if not st.get("logged_in"):
+            return {"ok": False, "message": "抖音还没登录，点「扫码登录」扫一次就好。"}
+        risk = self._dy_risk(action)
+        if not risk.get("ok"):
+            return {"ok": False, "message": risk.get("reason") or "风控拦住", "risk": risk}
+        if risk.get("wait"):
+            await asyncio.sleep(float(risk["wait"]))
+        if action in {"next", "video", "scroll"}:
+            res = await self.douyin_web.next_video()
+        elif action == "like":
+            res = await self.douyin_web.like()
+        elif action == "comment":
+            res = await self.douyin_web.comment(arg)
+        elif action == "share":
+            res = await self.douyin_web.current()
+        else:
+            res = {"ok": False, "message": f"不认识的动作：{action}"}
+        res["risk"] = risk
+        if res.get("ok"):
+            self._dy_log_add("动作", f"{action} {res.get('title') or ''}".strip()[:80])
+        return res
+
+    async def api_dy_next(self) -> dict[str, Any]:
+        try:
+            res = await self._dy_action("next")
+            return {"status": "ok" if res.get("ok") else "error", "data": res, "message": res.get("message", "")}
+        except Exception as exc:
+            return {"status": "error", "message": f"切换失败：{exc}"}
+
+    async def api_dy_like(self) -> dict[str, Any]:
+        try:
+            res = await self._dy_action("like")
+            return {"status": "ok" if res.get("ok") else "error", "data": res, "message": res.get("message", "")}
+        except Exception as exc:
+            return {"status": "error", "message": f"点赞失败：{exc}"}
+
+    async def api_dy_comment(self) -> dict[str, Any]:
+        try:
+            body = await self._json_body()
+            text = str(body.get("text") or "").strip()
+            if not text:
+                return {"status": "error", "message": "评论内容是空的"}
+            res = await self._dy_action("comment", text)
+            return {"status": "ok" if res.get("ok") else "error", "data": res, "message": res.get("message", "")}
+        except Exception as exc:
+            return {"status": "error", "message": f"评论失败：{exc}"}
+
+    async def api_dy_share(self) -> dict[str, Any]:
+        try:
+            res = await self._dy_share()
+            return {"status": "ok" if res.get("ok") else "error", "data": res, "message": res.get("message", "")}
+        except Exception as exc:
+            return {"status": "error", "message": f"分享失败：{exc}"}
+
+    async def api_dy_risk(self) -> dict[str, Any]:
+        """面板：读写公共风控参数（GET 读取 / POST 保存）。"""
+        from astrbot.api.web import request
+
+        try:
+            if request.method == "GET":
+                return {"status": "ok", "data": self.risk_core.snapshot()}
+            body = await self._json_body()
+            risk = self._settings.setdefault("risk", {})
+            numeric = {
+                "video_per_min": (0, 600),
+                "like_per_min": (0, 600),
+                "comment_per_min": (0, 600),
+                "dm_per_min": (0, 600),
+                "delay_min": (0.0, 120.0),
+                "delay_max": (0.0, 300.0),
+                "cooldown_seconds": (0, 86400),
+                "actions_per_session": (0, 100000),
+                "poll_seconds": (MIN_POLL_SECONDS, 3600),
+            }
+            for key, (lo, hi) in numeric.items():
+                if key not in body:
+                    continue
+                risk[key] = round(min(hi, max(lo, float(body.get(key)))), 2)
+            if risk.get("delay_max", 0) < risk.get("delay_min", 0):
+                risk["delay_max"] = risk["delay_min"]
+            if "enabled" in body:
+                risk["enabled"] = bool(body.get("enabled"))
+            self._save_settings()
+            return {"status": "ok", "data": self.risk_core.snapshot()}
+        except Exception as exc:
+            return {"status": "error", "message": f"风控参数保存失败：{exc}"}
+
+    async def _dy_web_session(self, eff: dict[str, Any]) -> dict[str, Any]:
+        """一次「看点视频」会话：管理员点一次跑一次，有界、随时可停。"""
+        items: list[dict[str, Any]] = []
+        started = time.time()
+        limit = int(eff.get("videos") or 3)
+        minutes = float(eff.get("minutes") or 3)
+        for _ in range(max(1, limit)):
+            if time.time() - started > minutes * 60:
+                break
+            risk = self._dy_risk("video")
+            if not risk.get("ok"):
+                return {"ok": False, "items": items, "error": risk.get("reason") or "风控拦住", "risk": True}
+            if risk.get("wait"):
+                await asyncio.sleep(float(risk["wait"]))
+            res = await self.douyin_web.next_video()
+            if not res.get("ok"):
+                return {"ok": False, "items": items, "error": res.get("message") or "获取失败"}
+            title = str(res.get("title") or "").strip()
+            if title:
+                items.append({"title": title, "dwell": round(risk.get("wait") or 0, 1),
+                              "watched_at": datetime.now().strftime("%H:%M:%S")})
+                self._dy_recent_append(title)
+            await asyncio.sleep(float(eff.get("dwell_min") or 3))
+        return {"ok": bool(items), "items": items, "minutes": round((time.time() - started) / 60, 1),
+                "risk": False, "error": "" if items else "这一轮没抓到视频标题"}
+
+    def _dy_restate(self, action: str, arg: str = "") -> str:
+        label = {
+            "next": "往下滑一个视频",
+            "like": "给当前这个视频点个赞",
+            "comment": f"在当前视频下面评论「{arg}」",
+            "share": "把现在这个视频分享到私信",
+            "start": "开始自动往下刷（我会一步一步来，随时能喊停）",
+        }.get(action, action)
+        self._dy_pending = {"action": action, "arg": arg, "ts": time.time()}
         return (
-            f"{lines.get(code, '')}\n"
-            "确认的话回我「/抖音 确认」，不想了就说「/抖音 停止」。"
+            f"行，我准备{label}。\n"
+            "你回一句「确认」我就动手，回「取消」就算了（这一步会先过一遍风控）。"
         )
 
-    async def _dy_execute(self, code: str) -> str:
-        guard = self._dy_guard()
-        if guard is not None:
-            return f"没动手：{guard.get('error')}"
-        if code == "open":
-            res = await asyncio.to_thread(self.douyin_pc.open_app)
+    async def _dy_confirm(self) -> str:
+        pend = self._dy_pending or {}
+        if not pend or time.time() - float(pend.get("ts") or 0) > 120:
+            self._dy_pending = {}
+            return "刚才那件事已经过期了，你再说一次想要我干嘛？"
+        action = str(pend.get("action") or "")
+        arg = str(pend.get("arg") or "")
+        self._dy_pending = {}
+        if action == "start":
+            eff = self._dy_effective()
+            res = await self._dy_web_session(eff)
+            if not res.get("ok"):
+                return f"没刷成：{res.get('error') or '风控或页面挡住了'}"
+            lines = [f"刷了 {len(res['items'])} 个（{res.get('minutes')} 分钟）："]
+            for i, it in enumerate(res["items"][:8], 1):
+                lines.append(f"{i}. {it['title'][:40]}")
+            return "\n".join(lines)
+        if action == "share":
+            res = await self._dy_share()
+            return res.get("message") or ("分享出去了" if res.get("ok") else "分享失败")
+        res = await self._dy_action(action, arg)
+        if not res.get("ok"):
+            return f"没做成：{res.get('message') or '页面没找到控件'}"
+        title = str(res.get("title") or "").strip()
+        extra = f"《{title[:40]}》" if title else "当前这个视频"
+        return f"好了，{extra}。" if action != "comment" else f"评论发出去了：「{arg}」。"
+
+    async def _dy_share(self) -> dict[str, Any]:
+        ok, msg = self._dy_ready()
+        if not ok:
+            return {"ok": False, "message": msg}
+        info = await self.douyin_web.current()
+        url = str(info.get("url") or "")
+        title = str(info.get("title") or "").strip()
+        if not url:
+            return {"ok": False, "message": "没读到当前视频，先在抖音里打开一个视频"}
+        targets = self._dy_admin_openids()
+        if not targets:
+            return {"ok": False, "message": "还没配抖音管理员 openid，先在面板里加一个"}
+        risk = self._dy_risk("share", targets[0])
+        if not risk.get("ok"):
+            return {"ok": False, "message": risk.get("reason") or "风控拦住"}
+        line = await self._dy_share_line(title)
+        text = f"{line}\n{title}\n{url}" if title else f"{line}\n{url}"
+        sent = 0
+        for uid in targets[:3]:
+            res = await self.douyin_web.send_dm(uid, text)
             if res.get("ok"):
-                return "抖音窗口已经叫到前面来了，画面我看得清。"
-            return f"打开没成功：{res.get('message') or res.get('error') or '未知原因'}"
-        if code == "next":
-            res = await asyncio.to_thread(self.douyin_pc.next_video)
-            if res.get("ok"):
-                title = str(res.get("title") or "").strip()
-                tail = f"，现在这条是「{title}」" if title else ""
-                return f"滑过去了{tail}。就这一下，我停住了。"
-            return f"没滑成：{res.get('error') or res.get('message') or '画面没有变化'}"
-        if code == "shot":
-            res = await asyncio.to_thread(self.douyin_pc.snapshot, True, "qq")
-            if res.get("ok"):
-                kind = str(res.get("kind") or "")
-                title = str(res.get("title") or "").strip()
-                parts = [f"截好了（{res.get('width')}×{res.get('height')}）"]
-                if kind == "video" or kind == "feed":
-                    parts.append("看着是视频流")
-                elif kind == "login":
-                    parts.append("但这屏是登录页")
-                elif kind == "risk":
-                    parts.append("但这屏是安全验证")
-                if title:
-                    parts.append(f"识别到标题「{title}」")
-                parts.append(f"文件在 douyin_captures/{res.get('file')}")
-                return "，".join(parts) + "。"
-            return f"没截成：{res.get('error') or '未知原因'}"
-        return "这个动作我不认识。"
+                sent += 1
+        if not sent:
+            return {"ok": False, "message": "分享没发出去，可能私信页没开或没登录"}
+        self._dy_log_add("分享", (title or url)[:80])
+        try:
+            await self._iso_say_safe(line)
+        except Exception:
+            pass
+        return {"ok": True, "message": f"分享到私信了：{text}", "title": title, "url": url}
+
+    async def _dy_share_line(self, title: str) -> str:
+        """一句贴合人设的感想；模型不可用时退回固定口吻。"""
+        fallback = "刷到这个，觉得你可能会想看。"
+        try:
+            prov = self._provider_for(self._last_umo or "")
+            if prov is None:
+                return fallback
+            prompt = f"我刚刷到一个抖音视频，标题是「{title[:60]}」。用一句话跟主人分享，松弛一点，别夸张，不超过 30 字。"
+            reply = await prov.text_chat(
+                prompt=prompt,
+                system_prompt="你是大肥鱼，DeepSeek，蓝发鲸鱼娘，说话松弛、随手打字那种。只输出一句话。",
+            )
+            line = str(reply or "").strip().replace("\n", " ")
+            return line[:60] or fallback
+        except Exception:
+            return fallback
+
+    async def _iso_say_safe(self, text: str) -> None:
+        try:
+            house = getattr(self, "isohouse", None)
+            if house is None:
+                return
+            house.add_log("对话", text[:120])
+        except Exception:
+            pass
 
     @filter.command("抖音")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def cmd_douyin(self, event: AstrMessageEvent):
-        """抖音 PC 客户端：状态 / 打开 / 下一个 / 截图 / 停止 / 确认（仅管理员）"""
+        """抖音网页版：状态 / 打开 / 下一个 / 点赞 / 评论 / 分享 / 停止 / 确认 / 取消"""
         raw = (event.message_str or "").strip()
         raw = re.sub(r"^/?抖音\s*", "", raw).strip()
         if not raw:
             yield event.plain_result(self._dy_help_text())
             return
         action = raw.split()[0]
-        if action in {"状态", "看看", "state"}:
-            yield event.plain_result(self._dy_state_text())
+        arg = raw[len(action):].strip()
+        if action in {"状态", "status"}:
+            st = await self.douyin_web.status()
+            risk = self.risk_core.snapshot()["cfg"]
+            yield event.plain_result(
+                f"抖音网页：{'已开' if st.get('running') else '没开'}"
+                f"，{'已登录' if st.get('logged_in') else '未登录'}\n"
+                f"风控：每分钟 {risk['video_per_min']} 个视频 / {risk['like_per_min']} 赞 / "
+                f"{risk['comment_per_min']} 评论 / {risk['dm_per_min']} 条私信，"
+                f"延时 {risk['delay_min']}-{risk['delay_max']} 秒"
+            )
             return
-        if action in {"确认", "确定", "执行", "好"}:
-            pending = self._dy_pending or {}
-            code = str(pending.get("action") or "")
-            age = time.time() - float(pending.get("ts") or 0)
+        if action in {"打开", "登录", "login"}:
+            res = await self.douyin_web.open_login()
+            yield event.plain_result(res.get("message") or ("好了" if res.get("ok") else "没打开"))
+            return
+        if action in {"确认", "确认执行", "ok"}:
+            yield event.plain_result(await self._dy_confirm())
+            return
+        if action in {"取消", "算了", "stop"}:
             self._dy_pending = {}
-            if not code:
-                yield event.plain_result("我这边没有等你确认的动作，直接说要干嘛就行。")
-                return
-            if age > 120:
-                yield event.plain_result("那个动作已经等太久了（超过两分钟），我取消了，重新说一次吧。")
-                return
-            yield event.plain_result(await self._dy_execute(code))
+            yield event.plain_result("行，不弄了。")
             return
-        if action in {"停止", "取消", "算了"}:
-            self._dy_pending = {}
-            yield event.plain_result("好，停下了，什么都没动。")
-            return
-        if action not in self.DY_ACTIONS:
+        mapping = {"下一个": "next", "下滑": "next", "点赞": "like", "评论": "comment", "分享": "share", "刷视频": "start"}
+        code = mapping.get(action)
+        if not code:
             yield event.plain_result(self._dy_help_text())
             return
-        yield event.plain_result(self._dy_restate(action))
+        if code == "comment" and not arg:
+            yield event.plain_result("评论得给句话：/抖音 评论 好看")
+            return
+        yield event.plain_result(self._dy_restate(code, arg))
 
-    @filter.llm_tool(name="douyin_pc")
-    async def tool_douyin_pc(self, event: AstrMessageEvent, action: str = "status") -> str:
-        """看看本机抖音 PC 客户端的状态、或者让它切一个视频（仅管理员，单步执行）。
+    def _dy_help_text(self) -> str:
+        return (
+            "抖音网页版指令：\n"
+            "/抖音 状态 / 打开 / 下一个 / 点赞 / 评论 <文本> / 分享 / 刷视频 / 停止 / 确认 / 取消\n"
+            "只有管理员能用；动作前我会先复述一遍，等你回「确认」。"
+        )
 
-        只读窗口状态 + 截图识别 + 在抖音窗口内下滑一次，不点击画面、不做互动。
-        窗口被最小化或被挡住时不会操作。
+    @filter.command("douyin_start")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_douyin_start(self, event: AstrMessageEvent):
+        """开始按指令刷视频（一次一小段，随时停）"""
+        yield event.plain_result(self._dy_restate("start"))
+
+    @filter.command("douyin_stop")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_douyin_stop(self, event: AstrMessageEvent):
+        """停止刷视频并清空待确认动作"""
+        self._dy_pending = {}
+        self.risk_core.reset_session()
+        yield event.plain_result("停了，手不动了。")
+
+    @filter.command("douyin_like")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_douyin_like(self, event: AstrMessageEvent):
+        """给当前视频点赞"""
+        yield event.plain_result(self._dy_restate("like"))
+
+    @filter.command("douyin_comment")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_douyin_comment(self, event: AstrMessageEvent):
+        """评论当前视频：/douyin_comment 文本"""
+        raw = (event.message_str or "").replace("/douyin_comment", "", 1).strip()
+        if not raw:
+            yield event.plain_result("评论得给句话：/douyin_comment 好看")
+            return
+        yield event.plain_result(self._dy_restate("comment", raw))
+
+    @filter.command("douyin_share")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_douyin_share(self, event: AstrMessageEvent):
+        """把当前视频分享到私信"""
+        yield event.plain_result(self._dy_restate("share"))
+
+    @filter.llm_tool(name="douyin")
+    async def tool_douyin(self, event: AstrMessageEvent, action: str, text: str = "") -> str:
+        """抖音网页版操作（仅管理员；动作前会复述并等待确认）
 
         Args:
-            action (str): status（看窗口状态）/ shot（截图并识别）/ next（窗口内下滑一个）/ open（打开客户端）
+            action (str): 状态 / 下一个 / 点赞 / 评论 / 分享 / 打开
+            text (str): 评论内容，其它动作留空
         """
-        if not event.is_admin():
-            return "这个能力只有管理员能用。"
-        code = str(action or "status").strip().lower()
-        if code in {"status", "state"}:
-            return self._dy_state_text()
-        if code not in {"shot", "next", "open"}:
-            return "只支持 status / shot / next / open。"
-        guard = self._dy_guard()
-        if guard is not None:
-            return f"没动手：{guard.get('error')}"
-        return await self._dy_execute(code)
+        try:
+            if not event.is_admin():
+                return "只有管理员能让我动抖音。"
+            act = str(action or "").strip()
+            if act in {"状态", "status"}:
+                st = await self.douyin_web.status()
+                return f"浏览器{'已开' if st.get('running') else '没开'}，{'已登录' if st.get('logged_in') else '未登录'}"
+            mapping = {"下一个": "next", "点赞": "like", "评论": "comment", "分享": "share", "打开": "login"}
+            if act == "打开":
+                res = await self.douyin_web.open_login()
+                return res.get("message") or "打开完成"
+            code = mapping.get(act)
+            if not code:
+                return self._dy_help_text()
+            return self._dy_restate(code, text)
+        except Exception as exc:
+            return f"抖音操作失败：{exc}"
 
     @filter.command("dy_on")
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -5263,18 +5903,18 @@ class TokenPanel(Star):
             yield event.plain_result(f"没有这个参数：{key}")
             return
         try:
-            if key in {"enabled", "notify", "auto_open"}:
+            if key in {"enabled", "notify", "headless", "platform_enabled"}:
                 dy[key] = value.lower() in {"1", "on", "true", "yes", "开"}
-            elif key in {"keywords"}:
+            elif key == "keywords":
                 dy[key] = value[:120]
-            elif key in {"app_path", "window_keyword", "process_name"}:
-                dy[key] = value[:260]
-            elif key in {"max_minutes"}:
+            elif key == "admin_openids":
+                dy[key] = [x.strip() for x in re.split(r"[,，\s]+", value) if x.strip()][:20]
+            elif key in {"poll_seconds", "wait_video"}:
+                dy[key] = round(max(MIN_POLL_SECONDS if key == "poll_seconds" else 0.5, float(value)), 1)
+            elif key == "login_timeout":
+                dy[key] = min(900, max(30, int(float(value))))
+            elif key == "max_minutes":
                 dy[key] = min(60, max(1, float(value)))
-            elif key in {"launch_timeout"}:
-                dy[key] = min(120, max(5, int(float(value))))
-            elif key in {"scroll_ticks"}:
-                dy[key] = min(8, max(1, int(float(value))))
             else:
                 dy[key] = int(float(value))
         except Exception:
@@ -5284,58 +5924,157 @@ class TokenPanel(Star):
         self._dy_manual_at = time.time()
         yield event.plain_result(f"已设置 {key} = {dy[key]}")
 
-    # ---- v1.16.0：抖音 PC 客户端（窗口状态 / 截图 / 翻页 / 打开 / 自检） ---- #
-
-    async def api_dy_pc_state(self) -> dict[str, Any]:
-        """当前抖音窗口状态（只读，不产生任何操作）。"""
+    async def api_dy_rail(self) -> dict[str, Any]:
+        """临时：悬停后列右侧操作栏。"""
         try:
-            st = await asyncio.to_thread(self.douyin_pc.state)
-            dy = self._dy_settings()
-            return {"status": "ok", "data": {
-                "state": st.as_dict(),
-                "enabled": bool(dy.get("enabled", True)),
-                "app_path": str(dy.get("app_path") or ""),
-                "auto_open": bool(dy.get("auto_open", True)),
-            }}
-        except Exception as exc:
-            logger.warning(f"[token_panel] 读取抖音窗口状态失败: {exc}")
-            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
-
-    async def api_dy_pc_shot(self) -> dict[str, Any]:
-        """截一张抖音窗口画面并识别（回传缩略图与识别结果）。"""
-        guard = self._dy_guard()
-        if guard is not None:
-            return {"status": "ok", "data": {"ok": False, "error": guard.get("error"), "state": guard.get("state")}}
-        try:
-            snap = await asyncio.to_thread(self.douyin_pc.snapshot, True, "panel")
-            return {"status": "ok", "data": snap}
+            return {"status": "ok", "data": await self.douyin_web.debug_rail()}
         except Exception as exc:
             return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
 
-    async def api_dy_pc_next(self) -> dict[str, Any]:
-        """在抖音窗口内下滑一格（切下一个），不做任何点击。"""
-        guard = self._dy_guard()
-        if guard is not None:
-            return {"status": "ok", "data": {"ok": False, "error": guard.get("error"), "state": guard.get("state")}}
+    async def api_dy_like_probe(self) -> dict[str, Any]:
+        """临时：按一次 z 看是否真的点赞。"""
         try:
-            res = await asyncio.to_thread(self.douyin_pc.next_video)
-            return {"status": "ok", "data": res}
+            return {"status": "ok", "data": await self.douyin_web.like_probe()}
         except Exception as exc:
             return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
 
-    async def api_dy_pc_open(self) -> dict[str, Any]:
-        """打开（或唤到前台）抖音 PC 客户端。"""
+    async def api_dy_debug_actions(self) -> dict[str, Any]:
+        """临时：探测点赞/评论/分享入口是否存在。"""
         try:
-            res = await asyncio.to_thread(self.douyin_pc.open_app)
-            return {"status": "ok", "data": res}
+            return {"status": "ok", "data": await self.douyin_web.probe_actions()}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_dy_debug_feed(self) -> dict[str, Any]:
+        """临时：看首页信息流结构。"""
+        try:
+            return {"status": "ok", "data": await self.douyin_web.debug_feed()}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_dy_debug_dm(self) -> dict[str, Any]:
+        """临时：找私信入口。"""
+        try:
+            return {"status": "ok", "data": await self.douyin_web.debug_dm_entry()}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_dy_debug_home(self) -> dict[str, Any]:
+        """临时：回首页探登录态与私信入口。"""
+        try:
+            return {"status": "ok", "data": await self.douyin_web.debug_home()}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_dy_debug_poll(self) -> dict[str, Any]:
+        """临时调试：手动跑一次私信拉取。"""
+        try:
+            items = await self.douyin_web.poll_messages()
+            st = await self.douyin_web.status()
+            shot = await self.douyin_web.debug_shot("messages-page")
+            return {"status": "ok", "data": {"count": len(items), "items": items[:5],
+                                             "state": st, "shot": shot}}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_dy_debug_head(self) -> dict[str, Any]:
+        """调试：页头右上角候选元素。"""
+        try:
+            return {"status": "ok", "data": await self.douyin_web.debug_header()}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_dy_debug_emit(self) -> dict[str, Any]:
+        """调试：模拟一条抖音私信进管线（验证 事件→模型→回包 整条链）。"""
+        try:
+            from astrbot.api.web import request
+
+            text = str(request.query.get("text") or "你好呀").strip()
+            inst = self.douyin_platform
+            if inst is None:
+                return {"status": "error", "message": "平台实例没启动"}
+            return {"status": "ok", "data": await inst.debug_emit(text)}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_dy_debug_send(self) -> dict[str, Any]:
+        """调试：给私信列表第一段会话发一条消息（验证发送链路）。"""
+        try:
+            from astrbot.api.web import request
+
+            text = str(request.query.get("text") or "在的，我在。").strip()
+            return {"status": "ok", "data": await self.douyin_web.debug_reply(text)}
+        except Exception as exc:
+            return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
+    async def api_dy_debug(self) -> dict[str, Any]:
+        """临时调试接口：默认看「登录」元素；?what=head 看页头右上角；?what=drawer 看私信抽屉。"""
+        try:
+            from astrbot.api.web import request
+
+            what = str(request.query.get("what") or "login").strip().lower()
+            if what == "head":
+                return {"status": "ok", "data": await self.douyin_web.debug_header()}
+            if what == "drawer":
+                return {"status": "ok", "data": await self.douyin_web.debug_drawer()}
+            if what == "dom":
+                return {"status": "ok", "data": await self.douyin_web.debug_dom()}
+            if what == "composer":
+                return {"status": "ok", "data": await self.douyin_web.debug_composer()}
+            if what == "queue":
+                pm = getattr(self.context, "platform_manager", None)
+                q1 = getattr(self, "_dy_q", None)
+                info = {
+                    "ctx_queue": id(self.context.get_event_queue()),
+                    "pm_queue": id(getattr(pm, "event_queue", None)),
+                    "inst_queue": id(getattr(self.douyin_platform, "_event_queue", None)),
+                    "inst_in_pm": bool(self.douyin_platform)
+                    and any(i.meta().id == DOUYIN_PLATFORM_ID for i in getattr(pm, "platform_insts", []) or []),
+                    "pm_qsize": (getattr(pm, "event_queue", None).qsize()
+                                 if getattr(pm, "event_queue", None) is not None else -1),
+                    "inst_qsize": (self.douyin_platform._event_queue.qsize()
+                                   if self.douyin_platform is not None else -1),
+                    "inst_meta": self.douyin_platform.meta().id if self.douyin_platform else "",
+                }
+                return {"status": "ok", "data": info}
+            if what == "click":
+                return {"status": "ok", "data": await self.douyin_web.debug_click(
+                    str(request.query.get("text") or "") or "去登录"
+                )}
+            data = await self.douyin_web.debug_login()
+            return {"status": "ok", "data": data}
         except Exception as exc:
             return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
 
     async def api_dy_check(self) -> dict[str, Any]:
-        """模块自检（只读）：依赖、客户端路径、窗口、OCR 语言。"""
+        """模块自检（只读）：Playwright、浏览器、登录、平台接入、公共风控。"""
         try:
-            res = await asyncio.to_thread(self.douyin_pc.selfcheck)
-            return {"status": "ok", "data": res}
+            items = await self.douyin_web.selfcheck()
+            items.append(
+                {
+                    "name": "公共风控",
+                    "state": "正常" if self.risk_core.cfg().get("enabled") else "警告",
+                    "detail": f"轮询下限 {MIN_POLL_SECONDS:.0f}s",
+                }
+            )
+            meta = getattr(self.douyin_platform, "_meta", None) if self.douyin_platform else None
+            plat_ok = bool(meta) and getattr(meta, "id", "") == DOUYIN_PLATFORM_ID
+            items.append(
+                {
+                    "name": "抖音平台接入",
+                    "state": "正常" if plat_ok else "异常",
+                    "detail": "事件队列已挂上，私信走常规管线" if plat_ok else "平台实例没挂上，私信进不来",
+                }
+            )
+            snap = self.risk_core.snapshot()
+            items.append(
+                {
+                    "name": "风控计数",
+                    "state": "正常",
+                    "detail": f"当前 {len(snap.get('active') or [])} 个用户有动作计数",
+                }
+            )
+            return {"status": "ok", "data": {"items": items}}
         except Exception as exc:
             return {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
 
@@ -5383,18 +6122,19 @@ class TokenPanel(Star):
                 if key not in payload:
                     continue
                 value = payload.get(key)
-                if key in {"enabled", "notify", "auto_open"}:
+                if key in {"enabled", "notify", "headless", "platform_enabled"}:
                     dy[key] = bool(value)
                 elif key == "keywords":
                     dy[key] = str(value or "")[:120]
-                elif key in {"app_path", "window_keyword", "process_name"}:
-                    dy[key] = str(value or "")[:260]
+                elif key == "admin_openids":
+                    vals = value if isinstance(value, list) else re.split(r"[,，\s]+", str(value or ""))
+                    dy[key] = [str(x).strip() for x in vals if str(x).strip()][:20]
+                elif key in {"poll_seconds", "wait_video"}:
+                    dy[key] = round(max(MIN_POLL_SECONDS if key == "poll_seconds" else 0.5, float(value)), 1)
+                elif key == "login_timeout":
+                    dy[key] = min(900, max(30, int(float(value))))
                 elif key == "max_minutes":
                     dy[key] = round(min(60, max(1, float(value))), 1)
-                elif key == "launch_timeout":
-                    dy[key] = min(120, max(5, int(float(value))))
-                elif key == "scroll_ticks":
-                    dy[key] = min(8, max(1, int(float(value))))
                 else:
                     dy[key] = int(value)
             ok = self._save_settings()
@@ -5521,7 +6261,7 @@ class TokenPanel(Star):
                 return
             cm = self.context.conversation_manager
             cid = str(await cm.get_curr_conversation_id(umo) or umo)
-            self._diary_add(umo, cid, text[:200], "medium")
+            self._diary_add(umo, cid, text, "medium")
         except Exception as exc:
             self._dbg(f"小屋记忆写入失败: {exc}")
 
@@ -5709,18 +6449,10 @@ class TokenPanel(Star):
                 return
             lines = [DOUYIN_PROMPT]
             try:
-                st = self.douyin_pc.state()
-                if st.found:
-                    bits = [f"窗口在（{st.rect[2]}×{st.rect[3]}）"]
-                    if st.minimized:
-                        bits.append("现在被最小化")
-                    elif st.covered >= 0.35:
-                        bits.append(f"有 {int(st.covered * 100)}% 被挡住")
-                    else:
-                        bits.append("看得清")
-                    lines.append("【当前窗口】" + "，".join(bits) + "。")
-                else:
-                    lines.append("【当前窗口】抖音客户端现在没开。")
+                st = await self.douyin_web.status()
+                bits = ["浏览器开着" if st.get("running") else "浏览器没开"]
+                bits.append("已登录" if st.get("logged_in") else "还没登录")
+                lines.append("【抖音网页】" + "，".join(bits) + "。")
             except Exception:
                 pass
             self._inject_extra(req, "\n".join(lines))
